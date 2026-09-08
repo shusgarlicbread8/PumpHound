@@ -6,20 +6,24 @@
 
 # Data and artifacts
 /data/
+/data.mac-bak/
 /artifacts/*
 !/artifacts/README.md
+/artifacts/*.mac-bak/
 /mlruns/
 /mlartifacts/
 
-# Rust
-/target/
+# Rust (directory or X9 symlink)
+/target
+/target.mac-bak/
 **/*.rs.bk
 
 # Node
 node_modules/
 dist/
 .turbo/
-apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/target
+apps/desktop/src-tauri/target.mac-bak/
 apps/desktop/src-tauri/gen/
 
 # Python
