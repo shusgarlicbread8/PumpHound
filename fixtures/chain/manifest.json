@@ -1,0 +1,48 @@
+{
+  "kind": "synthetic_chain_fixture",
+  "schema_version": 1,
+  "source": "fixture",
+  "label": "SYNTHETIC — not live mainnet",
+  "created_at": "2026-09-07T16:00:00.000000Z",
+  "chain": "solana-mainnet",
+  "claim": "These records are constructed for decoder, collector and replay plumbing. They are not captured mainnet transactions and must never be presented as live evidence.",
+  "decoder_version": "pump-idl-2026-09-07",
+  "idl": {
+    "lock": "vendor/pump-idl/SOURCE.lock",
+    "commit": "9c82f61cb711b044a17f770ab8ce9f9bdf78f333",
+    "pump_sha256": "b90bc471327f671449271d5d1d42354d1fae6f5a06502f5834459a3108138e49",
+    "program_id": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+  },
+  "events_uri": "fixtures/replay/events.jsonl",
+  "sha256": "be5f9deca95023f47754b9f2614404c3c1a04b181c0321eb0acb25b5316300ef",
+  "row_count": 72,
+  "files": [
+    {
+      "path": "fixtures/chain/sample_logs.json",
+      "format": "json-array",
+      "record_contract": "pumphound_domain::RawTransaction",
+      "row_count": 3,
+      "sha256": "9c2d72d7b923f4d240f299de71c5733c8b663429bf225bf6c64b96ecfb0ab88e",
+      "consumer": "ParquetReplaySource and pumphound-collector when PUMPHOUND_MODE=REPLAY"
+    },
+    {
+      "path": "fixtures/chain/decoded_events.json",
+      "format": "canonical-event-set",
+      "record_contract": "pumphound_domain::ChainEvent",
+      "row_count": 3,
+      "sha256": "dadaa0fca01f3655408170f010e918c2b6469378424ae0fa220ceed40e2aa330",
+      "consumer": "deterministic replay tests and documentation"
+    },
+    {
+      "path": "fixtures/replay/events.jsonl",
+      "format": "jsonl",
+      "record_contract": "pumphound_domain::ChainEvent",
+      "row_count": 72,
+      "sha256": "be5f9deca95023f47754b9f2614404c3c1a04b181c0321eb0acb25b5316300ef",
+      "consumer": "paper/graph replay scripts that read canonical events"
+    }
+  ],
+  "scenarios": ["create", "buy", "sell"],
+  "slots": ["350000001", "350000002", "350000003"],
+  "instruction_bytes": "placeholders (AA== / AQ== / Ag==); unknown discriminators must quarantine, never guess"
+}

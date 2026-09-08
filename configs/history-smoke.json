@@ -1,0 +1,35 @@
+{
+  "version": 2,
+  "output_dir": "data/history-smoke-v2",
+  "history_mode": null,
+  "windows": [
+    {
+      "id": "2026-08-01",
+      "gte": "2026-08-01T00:00:00Z",
+      "lte": "2026-08-01T23:59:59Z"
+    }
+  ],
+  "window_strategy": "round_robin",
+  "target_launches": 5,
+  "max_raw_transactions": 100,
+  "max_requests": 20,
+  "page_size": 10,
+  "before": null,
+  "until": null,
+  "min_slot": null,
+  "max_slot": null,
+  "rate_limit_per_second": 2.0,
+  "retries": 4,
+  "backoff_ms": 750,
+  "concurrency": 2,
+  "request_timeout_secs": 30,
+  "max_supported_transaction_version": 0,
+  "commitment": "finalized",
+  "max_failure_records": 100,
+  "allow_standard_fallback_on_denial": true,
+  "minimum_decode_success_fraction": 0.90,
+  "maximum_decode_failure_fraction": 0.10,
+  "minimum_canonical_events": 1,
+  "minimum_true_or_provisional_launches": 1,
+  "failure_signature_examples": 5
+}

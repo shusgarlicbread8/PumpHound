@@ -1,0 +1,12 @@
+[package]
+name = "pumphound-feature-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pumphound-domain.workspace = true
+pumphound-market-state.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true

@@ -1,0 +1,46 @@
+[package]
+name = "pumphound-core-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pumphound-core-api"
+path = "src/main.rs"
+
+[[bin]]
+name = "inspect-launch"
+path = "src/bin/inspect_launch.rs"
+
+[[bin]]
+name = "verify-ledger"
+path = "src/bin/verify_ledger.rs"
+
+[[bin]]
+name = "replay"
+path = "src/bin/replay.rs"
+
+[dependencies]
+anyhow.workspace = true
+async-nats.workspace = true
+axum.workspace = true
+chrono.workspace = true
+clickhouse.workspace = true
+futures.workspace = true
+pumphound-api-contract.workspace = true
+pumphound-chain-source.workspace = true
+pumphound-domain.workspace = true
+pumphound-feature-core.workspace = true
+pumphound-market-state.workspace = true
+pumphound-paper-core.workspace = true
+pumphound-storage.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+thiserror.workspace = true
+uuid.workspace = true

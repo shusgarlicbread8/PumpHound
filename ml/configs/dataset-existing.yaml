@@ -1,0 +1,53 @@
+schema_version: 1
+dataset_version: existing-shadow-v1
+feature_schema_version: features-v1
+corpus_kind: existing_canonical_shadow_experiment
+promotion_eligible: false
+event_sources:
+  - name: historical-canonical
+    uri: data/history-helius-full-25k/canonical/events.jsonl
+    manifest_uri: data/history-helius-full-25k/corpus-manifest.json
+    require_stable: true
+  - name: live-canonical-journal
+    uri: data/journal/events.jsonl
+    optional: true
+output_uri: artifacts/datasets/existing-shadow-v1
+observation_windows_seconds: [5, 10, 15, 30, 60, 120, 300, 900]
+require_finalized_labels: true
+include_dead_and_inactive_launches: true
+exclude_ambiguous_labels: false
+retain_censored_for_survival_models: true
+feature_availability: bitemporal
+amount_math_source: shared_rust_domain
+provenance_required: true
+training_input_format: parquet
+experimental_requirements:
+  minimum_rows_per_split:
+    train: 4
+    validation: 2
+    calibration: 1
+    test: 2
+  minimum_each_class_per_split: 1
+targets:
+  - graduated_by_6h_v1
+  - up_50_before_down_20_15m_v1
+  - severe_collapse_1h_v1
+  - exit_hazard_60s_v1
+split:
+  method: chronological_purged_walk_forward
+  fractions:
+    train: 0.60
+    validation: 0.15
+    calibration: 0.10
+    test: 0.15
+  purge_overlapping_label_intervals: true
+  minimum_boundary_embargo_seconds: 900
+  random_row_split: false
+  insufficient_history_action: SHADOW_TARGET_WITHHELD
+labels:
+  collapse_min_quote_volume_usd: 5000
+  collapse_peak_exit_quote_usd: 15
+  missing_usd_action: CENSOR
+  exit_risk_drawdown: 0.20
+  exit_risk_recovery: 0.10
+  exit_risk_horizon_seconds: 60

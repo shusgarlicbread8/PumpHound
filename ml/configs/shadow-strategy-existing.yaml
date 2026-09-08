@@ -1,0 +1,10 @@
+schema_version: 1
+kind: offline_shadow_strategy_comparison
+output_uri: artifacts/evaluations/shadow-comparison-input.json
+# Exact replay-derived costs must be supplied before evaluation. Null is deliberate:
+# the preparation CLI reports unavailable rather than inventing assumptions.
+cost_assumptions:
+  fee: null
+  latency: null
+  slippage: null
+  impact: null

@@ -1,0 +1,6 @@
+algorithm_version: graph-v1
+events_uri: data/journal/events.jsonl
+graph_config: ml/configs/graph-v1.yaml
+knowledge_cutoff: 2099-01-01T00:00:00.000000Z
+cutoff_slot: 0
+output_uri: artifacts/graph

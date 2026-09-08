@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "version": "CANDIDATE_ENRICHMENT_V1",
+  "enabled": false,
+  "daily_credits": 200,
+  "monthly_credits": 2000,
+  "per_candidate_credits": 50,
+  "max_candidates_per_hour": 2,
+  "max_wallets_per_candidate": 5,
+  "include_buyers_6_to_10": false,
+  "level1_credits_per_request": 10,
+  "level1_limit": 100,
+  "level2_enabled": false,
+  "level2_credits_upper_bound": 100,
+  "level2_limit": 100,
+  "level2_eligibility_reasons": [
+    "funding_inference_incomplete"
+  ],
+  "minimum_meaningful_native_lamports": 1000000,
+  "initial_funder_confidence_complete": 0.8,
+  "initial_funder_confidence_incomplete": 0.55,
+  "minimum_high_reputation": 0.8,
+  "known_service_addresses": []
+}

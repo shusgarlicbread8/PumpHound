@@ -1,0 +1,1224 @@
+openapi: 3.1.0
+info:
+  title: PumpHound API
+  version: "1"
+  description: |
+    Base path `/api/v1`. The Rust core-api owns validation.
+    Browser clients never call chain, data or AI providers directly.
+
+    Atomic amounts and slots are decimal strings. Timestamps are RFC3339 UTC.
+    Mutable commands require `client_request_id` or `Idempotency-Key`.
+    Key reuse with a different payload returns `409 IDEMPOTENCY_CONFLICT`.
+
+    Modes: `LIVE_WATCH`, `LIVE_PAPER_HEURISTIC`, `LIVE_PAPER_SHADOW_ML`,
+    `LIVE_PAPER_ML`, `REPLAY`, `RESEARCH`.
+    There is no live execution. Unsupported execution mode → `422 UNSUPPORTED_EXECUTION_MODE`.
+    No endpoint accepts a private key, signs a transaction or submits a bundle.
+  license:
+    name: UNLICENSED
+
+servers:
+  - url: http://127.0.0.1:8080/api/v1
+    description: Local loopback (default bind)
+
+tags:
+  - name: system
+  - name: launches
+  - name: wallets
+  - name: paper
+  - name: models
+  - name: replay
+  - name: investigations
+  - name: jobs
+  - name: watchlists
+  - name: alerts
+  - name: stream
+
+paths:
+  /health:
+    get:
+      tags: [system]
+      summary: Readiness, mode, decoder/model versions
+      operationId: getHealth
+      responses:
+        "200":
+          description: Health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /system/status:
+    get:
+      tags: [system]
+      summary: Per-source lag, queues, stores, model/AI status
+      operationId: getSystemStatus
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemStatus"
+
+  /system/capabilities:
+    get:
+      tags: [system]
+      summary: Enabled providers and entitlements (no secret values)
+      operationId: getCapabilities
+      responses:
+        "200":
+          description: Capabilities
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Capabilities"
+
+  /search:
+    get:
+      tags: [system]
+      summary: Token, wallet, creator or signature resolution
+      operationId: search
+      parameters:
+        - $ref: "#/components/parameters/QueryQ"
+        - $ref: "#/components/parameters/QueryType"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Search hits
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+
+  /settings:
+    get:
+      tags: [system]
+      summary: Non-secret settings and secret-present flags
+      operationId: getSettings
+      responses:
+        "200":
+          description: Settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Settings"
+    patch:
+      tags: [system]
+      summary: Audited configuration revision
+      operationId: patchSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SettingsPatch"
+      responses:
+        "200":
+          description: Updated settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Settings"
+
+  /launches:
+    get:
+      tags: [launches]
+      summary: Radar rows
+      operationId: listLaunches
+      parameters:
+        - name: age
+          in: query
+          schema: { type: string }
+        - name: venue
+          in: query
+          schema: { type: string, enum: [pump_curve, pump_swap] }
+        - name: quote
+          in: query
+          schema: { type: string }
+        - name: filter
+          in: query
+          schema: { type: string }
+        - name: sort
+          in: query
+          schema: { type: string }
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/AsOfSlot"
+      responses:
+        "200":
+          description: Snapshot of radar rows
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RadarSnapshot"
+        "503":
+          $ref: "#/components/responses/Error"
+
+  /launches/{id}:
+    get:
+      tags: [launches]
+      summary: Launch header, market snapshot, score summaries
+      operationId: getLaunch
+      parameters:
+        - $ref: "#/components/parameters/LaunchId"
+        - $ref: "#/components/parameters/AsOfSlot"
+      responses:
+        "200":
+          description: Launch detail
+        "404":
+          $ref: "#/components/responses/Error"
+
+  /launches/{id}/trades:
+    get:
+      tags: [launches]
+      summary: Canonical tape
+      operationId: listLaunchTrades
+      parameters:
+        - $ref: "#/components/parameters/LaunchId"
+        - $ref: "#/components/parameters/Cursor"
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: Tape (may be empty with quality reasons)
+
+  /launches/{id}/candles:
+    get:
+      tags: [launches]
+      summary: OHLCV with quote mint and gap markers
+      operationId: listLaunchCandles
+      parameters:
+        - $ref: "#/components/parameters/LaunchId"
+        - name: interval
+          in: query
+          schema: { type: string, example: 1s }
+        - name: from
+          in: query
+          schema: { type: string }
+        - name: to
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Candles
+
+  /launches/{id}/holders:
+    get:
+      tags: [launches]
+      summary: Program-excluded and cluster-adjusted holdings
+      operationId: listLaunchHolders
+      parameters:
+        - $ref: "#/components/parameters/LaunchId"
+        - $ref: "#/components/parameters/AsOfSlot"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Holders or covered-subset estimate
+
+  /launches/{id}/features:
+    get:
+      tags: [launches]
+      summary: FeatureVector and definitions
+      operationId: getLaunchFeatures
+      parameters:
+        - $ref: "#/components/parameters/LaunchId"
+        - name: window
+          in: query
+          schema: { type: integer }
+        - $ref: "#/components/parameters/AsOfSlot"
+        - name: schema
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Feature snapshot
+
+  /launches/{id}/predictions:
+    get:
+      tags: [launches]
+      summary: Immutable PredictionBundles
+      operationId: listLaunchPredictions
+      parameters:
+        - $ref: "#/components/parameters/LaunchId"
+        - name: window
+          in: query
+          schema: { type: integer }
+        - name: model
+          in: query
+          schema: { type: string }
+        - $ref: "#/components/parameters/AsOfSlot"
+      responses:
+        "200":
+          description: Predictions or MODEL NOT TRAINED
+
+  /launches/{id}/decisions:
+    get:
+      tags: [launches]
+      summary: Decisions, abstentions, gate reasons
+      operationId: listLaunchDecisions
+      parameters:
+        - $ref: "#/components/parameters/LaunchId"
+        - name: portfolio
+          in: query
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Decisions
+
+  /launches/{id}/graph:
+    get:
+      tags: [launches]
+      summary: Bounded graph plus hidden-node counts
+      operationId: getLaunchGraph
+      parameters:
+        - $ref: "#/components/parameters/LaunchId"
+        - $ref: "#/components/parameters/AsOfSlot"
+        - name: depth
+          in: query
+          schema: { type: integer }
+        - name: filter
+          in: query
+          schema: { type: string }
+        - name: budget
+          in: query
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Graph snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GraphSnapshot"
+
+  /wallets/{address}:
+    get:
+      tags: [wallets]
+      summary: Wallet balances coverage, reputation, label evidence
+      operationId: getWallet
+      parameters:
+        - $ref: "#/components/parameters/Address"
+        - $ref: "#/components/parameters/AsOfSlot"
+      responses:
+        "200":
+          description: Wallet
+
+  /wallets/{address}/activity:
+    get:
+      tags: [wallets]
+      summary: Trades, transfers, launches
+      operationId: listWalletActivity
+      parameters:
+        - $ref: "#/components/parameters/Address"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Activity
+
+  /wallets/{address}/funding:
+    get:
+      tags: [wallets]
+      summary: Bounded funding paths (inferred, not ownership)
+      operationId: getWalletFunding
+      parameters:
+        - $ref: "#/components/parameters/Address"
+        - $ref: "#/components/parameters/AsOfSlot"
+        - name: max_depth
+          in: query
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Funding paths
+
+  /creators/{address}:
+    get:
+      tags: [wallets]
+      summary: Creator launches, cohorts, reputation posterior
+      operationId: getCreator
+      parameters:
+        - $ref: "#/components/parameters/Address"
+        - $ref: "#/components/parameters/AsOfSlot"
+      responses:
+        "200":
+          description: Creator
+
+  /clusters/{id}:
+    get:
+      tags: [wallets]
+      summary: Cluster memberships and lineage
+      operationId: getCluster
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: version
+          in: query
+          schema: { type: string }
+        - $ref: "#/components/parameters/AsOfSlot"
+      responses:
+        "200":
+          description: Cluster
+
+  /evidence/{id}:
+    get:
+      tags: [system]
+      summary: Evidence record plus raw pointer
+      operationId: getEvidence
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: "#/components/parameters/AsOfSlot"
+      responses:
+        "200":
+          description: Evidence
+
+  /paper/quotes:
+    post:
+      tags: [paper]
+      summary: Paper quote with cost breakdown (never live)
+      operationId: createPaperQuote
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaperOrderRequest"
+      responses:
+        "200":
+          description: PaperQuote
+        "422":
+          $ref: "#/components/responses/Error"
+
+  /paper/orders:
+    post:
+      tags: [paper]
+      summary: Accept or reject a paper order. Never live execution.
+      operationId: createPaperOrder
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaperOrderRequest"
+      responses:
+        "200":
+          description: Accepted or queued paper order
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+
+  /paper/orders/{id}/cancel:
+    post:
+      tags: [paper]
+      summary: Cancel only before simulated arrival
+      operationId: cancelPaperOrder
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClientRequest"
+      responses:
+        "200":
+          description: Cancel result
+
+  /paper/portfolios:
+    get:
+      tags: [paper]
+      summary: Paper and replay portfolios
+      operationId: listPortfolios
+      responses:
+        "200":
+          description: Portfolios
+    post:
+      tags: [paper]
+      summary: Create portfolio, initial ledger, active run
+      operationId: createPortfolio
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewPortfolio"
+      responses:
+        "200":
+          description: Portfolio
+
+  /paper/portfolios/{id}:
+    get:
+      tags: [paper]
+      summary: Cash, positions, orders, marks, breaker
+      operationId: getPortfolio
+      parameters:
+        - $ref: "#/components/parameters/PortfolioId"
+        - name: run
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Portfolio
+        "404":
+          $ref: "#/components/responses/Error"
+
+  /paper/portfolios/{id}/ledger:
+    get:
+      tags: [paper]
+      summary: Immutable movements, lots, reconciliation
+      operationId: getPortfolioLedger
+      parameters:
+        - $ref: "#/components/parameters/PortfolioId"
+        - $ref: "#/components/parameters/Cursor"
+        - name: run
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Ledger
+
+  /paper/portfolios/{id}/performance:
+    get:
+      tags: [paper]
+      summary: Net/gross metrics and cost attribution
+      operationId: getPortfolioPerformance
+      parameters:
+        - $ref: "#/components/parameters/PortfolioId"
+        - name: run
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Performance
+
+  /paper/portfolios/{id}/breaker-reset:
+    post:
+      tags: [paper]
+      summary: Audited breaker reset
+      operationId: resetBreaker
+      parameters:
+        - $ref: "#/components/parameters/PortfolioId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClientRequest"
+      responses:
+        "200":
+          description: Reset
+
+  /paper/portfolios/{id}/policy:
+    post:
+      tags: [paper]
+      summary: Switch active policy version
+      operationId: switchPortfolioPolicy
+      parameters:
+        - $ref: "#/components/parameters/PortfolioId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [policy_version, client_request_id]
+              properties:
+                policy_version: { type: string }
+                client_request_id: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Policy switch
+
+  /policies:
+    post:
+      tags: [paper]
+      summary: Immutable policy version
+      operationId: createPolicy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: Policy version and hash
+
+  /models:
+    get:
+      tags: [models]
+      summary: Registry and model cards
+      operationId: listModels
+      parameters:
+        - name: target
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [candidate, shadow, champion, retired, rejected]
+      responses:
+        "200":
+          description: Models or MODEL NOT TRAINED
+
+  /models/train:
+    post:
+      tags: [models]
+      summary: Queue a training job. Never auto-promotes.
+      operationId: trainModel
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                dataset_manifest: { type: object }
+                config: { type: object }
+      responses:
+        "200":
+          description: Queued job
+
+  /models/{version}/promote:
+    post:
+      tags: [models]
+      summary: Promote shadow/champion after compatibility checks
+      operationId: promoteModel
+      parameters:
+        - name: version
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role: { type: string, enum: [shadow, champion] }
+                reason: { type: string }
+      responses:
+        "200":
+          description: Promotion audit
+
+  /models/{version}/retire:
+    post:
+      tags: [models]
+      summary: Retire while retaining the artifact
+      operationId: retireModel
+      parameters:
+        - name: version
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        "200":
+          description: Retired
+
+  /replays:
+    post:
+      tags: [replay]
+      summary: Start a pinned replay job
+      operationId: startReplay
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: Replay run
+
+  /replays/{id}:
+    get:
+      tags: [replay]
+      summary: Progress, manifest hash, outputs
+      operationId: getReplay
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Replay status
+
+  /replays/{id}/control:
+    post:
+      tags: [replay]
+      summary: pause, resume, step or speed
+      operationId: controlReplay
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                action: { type: string, enum: [pause, resume, step, speed] }
+                speed: { type: number }
+      responses:
+        "200":
+          description: Virtual clock state
+
+  /enrichment/status:
+    get:
+      tags: [intelligence]
+      summary: Candidate enrichment cache and credit status
+      responses:
+        "200":
+          description: Counts and settled/reserved credit usage; never secrets
+
+  /enrichment/candidates/{decision_id}:
+    get:
+      tags: [intelligence]
+      summary: Read a persisted candidate dossier
+      parameters:
+        - name: decision_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Candidate wallet evidence and enrichment state }
+        "404": { description: Candidate dossier not found }
+
+  /enrichment/wallets/{wallet}:
+    get:
+      tags: [intelligence]
+      summary: Read permanent wallet enrichment cache
+      parameters:
+        - name: wallet
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Cached summaries and inferred funding evidence }
+        "404": { description: Wallet enrichment not found }
+
+  /investigations:
+    post:
+      tags: [investigations]
+      summary: Queue an evidence-grounded investigation
+      operationId: startInvestigation
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                subject: { type: string }
+                as_of: { type: string }
+                roles: { type: array, items: { type: string } }
+                provider: { type: string }
+      responses:
+        "200":
+          description: Investigation job
+
+  /investigations/{id}:
+    get:
+      tags: [investigations]
+      summary: Role outputs, citations, validation, dissent
+      operationId: getInvestigation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Investigation
+
+  /jobs/{id}:
+    get:
+      tags: [jobs]
+      summary: Job state, progress, resumable cursor
+      operationId: getJob
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "200":
+          description: Job
+
+  /jobs/{id}/cancel:
+    post:
+      tags: [jobs]
+      summary: Cooperative cancellation
+      operationId: cancelJob
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClientRequest"
+      responses:
+        "200":
+          description: Cancelled
+
+  /watchlists:
+    get:
+      tags: [watchlists]
+      summary: Lists and item counts
+      operationId: listWatchlists
+      responses:
+        "200":
+          description: Watchlists
+    post:
+      tags: [watchlists]
+      summary: Create a list
+      operationId: createWatchlist
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        "200":
+          description: Watchlist
+
+  /watchlists/{id}/items/{subject}:
+    put:
+      tags: [watchlists]
+      summary: Idempotent add
+      operationId: addWatchlistItem
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: subject
+          in: path
+          required: true
+          schema: { type: string }
+        - name: subject_type
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Added
+    delete:
+      tags: [watchlists]
+      summary: Idempotent remove
+      operationId: removeWatchlistItem
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: subject
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Removed
+
+  /alerts:
+    get:
+      tags: [alerts]
+      summary: Alert events with evidence
+      operationId: listAlerts
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - name: ack
+          in: query
+          schema: { type: string, enum: [open, acknowledged] }
+      responses:
+        "200":
+          description: Alerts
+
+  /alert-rules:
+    post:
+      tags: [alerts]
+      summary: Versioned alert rule
+      operationId: createAlertRule
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: Rule
+
+  /alerts/{id}/acknowledge:
+    post:
+      tags: [alerts]
+      summary: Acknowledge an alert
+      operationId: acknowledgeAlert
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClientRequest"
+      responses:
+        "200":
+          description: Acknowledged
+
+  /exports/{job_id}:
+    get:
+      tags: [jobs]
+      summary: Authenticated local/remote artifact download
+      operationId: getExport
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Artifact stream
+        "404":
+          $ref: "#/components/responses/Error"
+
+  /stream:
+    get:
+      tags: [stream]
+      summary: WebSocket upgrade
+      description: |
+        Client sends
+        `{"type":"subscribe","request_id":"r1","topics":["radar","system"],"resume":{"epoch":"e1","sequence":"1839"}}`.
+
+        Server messages use `StreamMessage`. Heartbeats every 5 seconds.
+        Topics: `radar`, `launch:{id}`, `wallet:{pubkey}`, `graph:{id}`,
+        `paper:{portfolio}`, `replay:{run}`, `job:{id}`, `alerts`, `system`.
+
+        Authenticate via the packaged app session. No long-lived bearer token in the URL.
+      operationId: stream
+      responses:
+        "101":
+          description: Switching protocols
+        "200":
+          description: Some stacks report 200 on upgrade
+
+components:
+  parameters:
+    LaunchId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      description: launch_id or mint
+    PortfolioId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    JobId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    Address:
+      name: address
+      in: path
+      required: true
+      schema: { type: string }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+      description: Opaque cursor. Default page 100, max 500.
+    AsOfSlot:
+      name: as_of_slot
+      in: query
+      schema: { type: string }
+      description: Decimal slot string for historical reads
+    QueryQ:
+      name: q
+      in: query
+      required: true
+      schema: { type: string }
+    QueryType:
+      name: type
+      in: query
+      schema: { type: string }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      schema: { type: string }
+    KnowledgeCutoff:
+      name: knowledge_cutoff
+      in: query
+      schema: { type: string, format: date-time }
+
+  responses:
+    Error:
+      description: Error envelope
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+
+  schemas:
+    Atomic:
+      type: string
+      description: Unsigned integer decimal string
+      example: "10000000"
+    Slot:
+      type: string
+      example: "350000001"
+    Pubkey:
+      type: string
+      description: Base58 32-byte public key
+    AssetAmount:
+      type: object
+      required: [mint, atomic, decimals]
+      properties:
+        mint: { $ref: "#/components/schemas/Pubkey" }
+        atomic: { $ref: "#/components/schemas/Atomic" }
+        decimals: { type: integer, minimum: 0, maximum: 255 }
+    ObservationPoint:
+      type: object
+      required: [slot, observed_at, knowledge_cutoff, commitment]
+      properties:
+        slot: { $ref: "#/components/schemas/Slot" }
+        tx_index: { type: integer, nullable: true }
+        event_index: { type: integer, nullable: true }
+        event_time: { type: string, format: date-time, nullable: true }
+        observed_at: { type: string, format: date-time }
+        knowledge_cutoff: { type: string, format: date-time }
+        commitment: { type: string, enum: [processed, confirmed, finalized] }
+    DataQuality:
+      type: object
+      properties:
+        grade: { type: string, enum: [A, B, C, UNAVAILABLE] }
+        score: { type: number }
+        chain_lag_ms: { type: integer, nullable: true }
+        market_lag_ms: { type: integer, nullable: true }
+        ordering: { type: string, enum: [exact, provisional, unknown] }
+        coverage:
+          type: string
+          enum: [complete_for_scope, partial, unknown]
+        missing_fields:
+          type: array
+          items: { type: string }
+        stale_components:
+          type: array
+          items: { type: string }
+        reasons:
+          type: array
+          items: { type: string }
+    Flag:
+      type: object
+      required: [code, evidence_id, severity]
+      properties:
+        code: { type: string }
+        evidence_id: { type: string }
+        severity: { type: string, enum: [info, warning, critical] }
+    RadarRow:
+      type: object
+      required: [launch_id, mint, protocol, quote_mint, buyers, quality, as_of]
+      properties:
+        launch_id: { type: string }
+        mint: { $ref: "#/components/schemas/Pubkey" }
+        symbol: { type: string, nullable: true }
+        age_seconds: { type: number }
+        protocol: { type: string, enum: [pump_curve, pump_swap] }
+        quote_mint: { $ref: "#/components/schemas/Pubkey" }
+        price_quote: { type: string, nullable: true }
+        executable_depth_quote: { type: string, nullable: true }
+        curve_progress: { type: number, nullable: true }
+        buyers: { type: integer }
+        independent_clusters: { type: integer, nullable: true }
+        flow_60s_quote: { type: string, nullable: true }
+        graduation_6h: { type: number, nullable: true }
+        collapse_1h: { type: number, nullable: true }
+        heuristic_rank: { type: number, nullable: true }
+        prediction_id: { type: string, nullable: true }
+        stance: { type: string, enum: [WATCH, WAIT, AVOID, PAPER_CANDIDATE] }
+        paper_position_id: { type: string, nullable: true }
+        flags:
+          type: array
+          items: { $ref: "#/components/schemas/Flag" }
+        quality: { $ref: "#/components/schemas/DataQuality" }
+        as_of: { $ref: "#/components/schemas/ObservationPoint" }
+    StreamCursor:
+      type: object
+      properties:
+        epoch: { type: string }
+        sequence: { type: integer }
+    RadarSnapshot:
+      type: object
+      properties:
+        as_of: { type: string, format: date-time }
+        snapshot_id: { type: string }
+        stream_cursor: { $ref: "#/components/schemas/StreamCursor" }
+        quality: { $ref: "#/components/schemas/DataQuality" }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/RadarRow" }
+    GraphSnapshot:
+      type: object
+      properties:
+        subject_id: { type: string }
+        nodes: { type: array, items: { type: object } }
+        edges: { type: array, items: { type: object } }
+        hidden_nodes: { type: integer }
+        as_of: { type: string, format: date-time }
+      description: Inferred links are not ownership.
+    HealthResponse:
+      type: object
+      required: [ready, mode, uptime_seconds, decoder_version, source_label]
+      properties:
+        ready: { type: boolean }
+        mode: { type: string, enum: [LIVE_WATCH, LIVE_PAPER_HEURISTIC, LIVE_PAPER_SHADOW_ML, LIVE_PAPER_ML, REPLAY, RESEARCH] }
+        uptime_seconds: { type: integer }
+        decoder_version: { type: string }
+        source_label: { type: string }
+        model_version: { type: string, nullable: true }
+    SystemStatus:
+      type: object
+      properties:
+        mode: { type: string }
+        source: { type: string }
+        chain:
+          type: string
+          enum: [healthy, delayed, backfilling, degraded, disconnected, inconsistent]
+        last_slot: { type: string }
+        lag_ms: { type: integer }
+        decoded: { type: integer }
+        quarantined: { type: integer }
+        stores: { type: object }
+        model: { type: string }
+        ai: { type: string }
+    Capabilities:
+      type: object
+      properties:
+        laserstream: { type: boolean }
+        rpc_fallback: { type: boolean }
+        birdeye: { type: boolean }
+        jupiter: { type: boolean }
+        pyth: { type: boolean }
+        investigator: { type: boolean }
+        secrets_redacted: { type: boolean }
+    SearchResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { type: object }
+    Settings:
+      type: object
+      additionalProperties: true
+    SettingsPatch:
+      type: object
+      properties:
+        expected_revision: { type: integer }
+      additionalProperties: true
+    ClientRequest:
+      type: object
+      properties:
+        client_request_id: { type: string, format: uuid }
+        reason: { type: string }
+    NewPortfolio:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        funding_lots: { type: array, items: { type: object } }
+        policy: { type: string }
+    PaperOrderRequest:
+      type: object
+      required:
+        - client_request_id
+        - portfolio_id
+        - market
+        - side
+        - input
+        - output_mint
+        - max_slippage_bps
+        - quote_id
+        - policy_version
+        - decision_id
+      properties:
+        client_request_id: { type: string, format: uuid }
+        portfolio_id: { type: string, format: uuid }
+        launch_id: { type: string, format: uuid }
+        market:
+          $ref: "#/components/schemas/Pubkey"
+        side: { type: string, enum: [buy, sell] }
+        input: { $ref: "#/components/schemas/AssetAmount" }
+        output_mint: { $ref: "#/components/schemas/Pubkey" }
+        max_slippage_bps: { type: integer }
+        quote_id: { type: string, format: uuid }
+        policy_version: { type: string }
+        decision_id: { type: string, format: uuid }
+    PaperQuote:
+      type: object
+      properties:
+        quote_id: { type: string, format: uuid }
+        market_snapshot_id: { type: string }
+        input: { $ref: "#/components/schemas/AssetAmount" }
+        expected_output: { $ref: "#/components/schemas/AssetAmount" }
+        minimum_output: { $ref: "#/components/schemas/AssetAmount" }
+        reserve_input: { $ref: "#/components/schemas/AssetAmount" }
+        fee_components:
+          type: array
+          items: { type: object }
+        price_impact_bps: { type: integer }
+        expires_at: { type: string, format: date-time }
+        quality: { $ref: "#/components/schemas/DataQuality" }
+    StreamMessage:
+      type: object
+      required: [type, schema_version, epoch, sequence, topic, sent_at, payload]
+      properties:
+        type:
+          type: string
+          enum: [snapshot, delta, event, heartbeat, resync_required, error]
+        schema_version: { type: integer, enum: [1] }
+        epoch: { type: string }
+        sequence: { type: string }
+        topic: { type: string }
+        sent_at: { type: string, format: date-time }
+        as_of_slot: { type: string, nullable: true }
+        payload: {}
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, example: QUOTE_STALE }
+            message: { type: string }
+            retryable: { type: boolean }
+            request_id: { type: string }
+            details: { type: object }
+      example:
+        error:
+          code: UNSUPPORTED_EXECUTION_MODE
+          message: watch/research cannot place orders
+          retryable: false
+          request_id: "01900000-0000-7000-8000-000000000099"
+          details: {}

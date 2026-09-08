@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pumphound.local/schemas/investigation-response-v1.json",
+  "title": "PumpHound Investigation Response v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["summary", "stance", "confidence", "claims", "data_gaps", "suggested_checks"],
+  "properties": {
+    "summary": { "type": "string", "minLength": 1 },
+    "stance": {
+      "type": "string",
+      "enum": ["WATCH", "WAIT", "AVOID", "PAPER_CANDIDATE"]
+    },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["claim", "supporting_evidence_ids", "counter_evidence_ids", "uncertainty"],
+        "properties": {
+          "claim": { "type": "string" },
+          "supporting_evidence_ids": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "counter_evidence_ids": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "uncertainty": { "type": "string" }
+        }
+      }
+    },
+    "data_gaps": { "type": "array", "items": { "type": "string" } },
+    "suggested_checks": { "type": "array", "items": { "type": "string" } }
+  }
+}

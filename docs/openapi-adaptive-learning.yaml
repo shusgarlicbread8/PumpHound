@@ -1,0 +1,96 @@
+openapi: 3.1.0
+info:
+  title: PumpHound Adaptive Learning API
+  version: 1.0.0
+paths:
+  /api/v1/models/train:
+    post:
+      summary: Queue a durable adaptive retraining cycle
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                trigger:
+                  type: string
+                  enum: [manual, scheduled, minimum_new_labels]
+                minimum_new_labels: { type: integer, minimum: 1 }
+                dataset_config_path: { type: string }
+                train_config_path: { type: string }
+      responses:
+        "202":
+          description: Queued; training success never promotes a model.
+  /api/v1/research/learning:
+    get:
+      summary: Get the complete ALPHA-LEARN research state
+      parameters:
+        - $ref: "#/components/parameters/Experiment"
+      responses:
+        "200":
+          description: Real persisted learning state; empty arrays mean no observations.
+  /api/v1/research/timing:
+    get:
+      summary: Get create-to-observe-to-snapshot-to-decision percentiles
+      parameters:
+        - $ref: "#/components/parameters/Experiment"
+      responses:
+        "200":
+          description: Persisted timing metrics.
+  /api/v1/research/models:
+    get:
+      summary: Get champion, challenger, shadow, and transition history
+      parameters:
+        - $ref: "#/components/parameters/Experiment"
+      responses:
+        "200":
+          description: Model lifecycle state.
+  /api/v1/research/policies:
+    get:
+      summary: Get immutable policy versions and transition history
+      parameters:
+        - $ref: "#/components/parameters/Experiment"
+      responses:
+        "200":
+          description: Policy lifecycle state.
+  /api/v1/research/models/{version}/promote:
+    post:
+      summary: Explicitly promote one shadow model for paper mode
+      parameters:
+        - name: version
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason, gate_version, gate_passed, gate_evidence, paper_only]
+              properties:
+                reason: { type: string, minLength: 1 }
+                gate_version: { type: string, minLength: 1 }
+                gate_passed: { type: boolean, const: true }
+                gate_evidence: { type: object }
+                paper_only: { type: boolean, const: true }
+      responses:
+        "200":
+          description: Transactional, audited paper-only promotion.
+        "404":
+          description: Unknown model.
+        "409":
+          description: Model is not shadow or champion constraint refused.
+        "422":
+          description: Promotion gate evidence is incomplete.
+components:
+  parameters:
+    Experiment:
+      name: experiment_id
+      in: query
+      required: false
+      schema:
+        type: string
+        const: ALPHA-LEARN

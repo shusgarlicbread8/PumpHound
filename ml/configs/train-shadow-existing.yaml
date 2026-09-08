@@ -1,0 +1,105 @@
+schema_version: 1
+experiment_name: existing-data-shadow-v1
+training_mode: shadow_experimental
+random_seed: 42
+dataset_uri: artifacts/datasets/existing-shadow-v1
+artifact_uri: artifacts/models/shadows
+registry_uri: artifacts/models/registry.json
+train_report_uri: artifacts/models/shadow-train-report.json
+feature_schema_version: features-v1
+serving_feature_names:
+  - age_seconds
+  - buy_count_5
+  - buy_count_15
+  - buy_count_30
+  - buy_count_60
+  - buy_count_120
+  - buy_count_300
+  - sell_count_5
+  - sell_count_15
+  - sell_count_30
+  - sell_count_60
+  - sell_count_120
+  - sell_count_300
+  - buy_quote_5
+  - buy_quote_15
+  - buy_quote_30
+  - buy_quote_60
+  - buy_quote_120
+  - buy_quote_300
+  - sell_quote_5
+  - sell_quote_15
+  - sell_quote_30
+  - sell_quote_60
+  - sell_quote_120
+  - sell_quote_300
+  - buy_sell_imbalance_30
+  - buy_sell_imbalance_60
+  - unique_buyers_15
+  - unique_buyers_30
+  - unique_buyers_60
+  - unique_buyers_300
+  - return_30
+targets:
+  - graduated_by_6h_v1
+  - up_50_before_down_20_15m_v1
+  - severe_collapse_1h_v1
+  - exit_hazard_60s_v1
+xgboost:
+  objective: binary:logistic
+  eval_metric: logloss
+  tree_method: hist
+  device: cpu
+  n_estimators: 500
+  learning_rate: 0.05
+  max_depth: 4
+  min_child_weight: 3
+  subsample: 0.8
+  colsample_bytree: 0.8
+  reg_lambda: 5.0
+  early_stopping_rounds: 50
+tuning:
+  enabled: false
+calibration:
+  default_method: sigmoid
+  isotonic_minimum_calibration_rows: 500
+  isotonic_minimum_each_class: 25
+  fit_on_calibration_split_only: true
+familiarity:
+  minimum_score: 0.65
+confidence_intervals:
+  method: deterministic_percentile_bootstrap
+  bootstrap_repeats: 200
+  confidence: 0.95
+small_sample_warnings:
+  minimum_matured_rows: 200
+  minimum_positives: 30
+  minimum_rows_per_split: 30
+training_requirements:
+  minimum_rows_per_split:
+    train: 4
+    validation: 2
+    calibration: 1
+    test: 2
+  minimum_each_class_per_split: 1
+  allow_uncalibrated_shadow: true
+threshold_costs:
+  true_positive_value: 1.0
+  false_positive_cost: 1.0
+  false_negative_cost: 0.25
+  action_cost: 0.02
+promotion:
+  automatic: false
+  initial_status: shadow
+  gates:
+    minimum_matured_samples: 10000
+    minimum_positives: 250
+    require_calibration: true
+    maximum_calibration_ece: 0.08
+    require_policy_threshold: true
+    held_out_metrics:
+      roc_auc: {min: 0.60}
+      pr_auc: {min: 0.15}
+      log_loss: {max: 0.65}
+      brier: {max: 0.22}
+      ece: {max: 0.08}

@@ -1,0 +1,208 @@
+[
+  {
+    "signature": "5cwcxnHZREH8T7paF3wMcreei4TCUt2R955EgZuCMfsJMRToa7KbaDMTFaHyM3S3P1Qn35Bm1SyyKmSWCpKyMCah",
+    "slot": "350000001",
+    "block_time": "2026-01-15T12:00:00.000000Z",
+    "transaction_index": 0,
+    "err": null,
+    "fee_payer": "XxV8kmS4Kxa85sshmQmfR1KETpNf56sd75ZitoSpVY1",
+    "account_keys": [
+      "XxV8kmS4Kxa85sshmQmfR1KETpNf56sd75ZitoSpVY1",
+      "2brAfKg9iR83ZZVtKCFiSnUBbTJjKCEF7YToWHCNne6V",
+      "JCiSCTCYdQPUs88TqM9jNee1hMpDCxk3zis9qQgrZsGr",
+      "3ruE2udynYZBVAdTPe2vHWT74msBW5UXBXVWfbK1Gust",
+      "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+      "So11111111111111111111111111111111111111112",
+      "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+      "11111111111111111111111111111111"
+    ],
+    "loaded_writable_addresses": [],
+    "loaded_readonly_addresses": [],
+    "instructions": [
+      {
+        "program_id": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+        "accounts": [
+          "JCiSCTCYdQPUs88TqM9jNee1hMpDCxk3zis9qQgrZsGr",
+          "3ruE2udynYZBVAdTPe2vHWT74msBW5UXBXVWfbK1Gust",
+          "2brAfKg9iR83ZZVtKCFiSnUBbTJjKCEF7YToWHCNne6V",
+          "XxV8kmS4Kxa85sshmQmfR1KETpNf56sd75ZitoSpVY1",
+          "So11111111111111111111111111111111111111112"
+        ],
+        "data_base64": "AA==",
+        "stack_height": 1
+      }
+    ],
+    "inner_instructions": [],
+    "log_messages": [
+      "Program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P invoke [1]",
+      "Program log: Instruction: Create",
+      "Program log: SYNTHETIC FIXTURE — not a live mainnet transaction",
+      "Program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P consumed 42000 of 200000 compute units",
+      "Program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P success"
+    ],
+    "pre_balances": [2000000000, 0, 0, 0, 1, 1, 1, 1],
+    "post_balances": [1985000000, 0, 1461600, 890880, 1, 1, 1, 1],
+    "pre_token_balances": [],
+    "post_token_balances": [],
+    "compute_units_consumed": 42000,
+    "raw_json": {
+      "synthetic": true,
+      "label": "not-live-mainnet",
+      "scenario": "create"
+    }
+  },
+  {
+    "signature": "2npmMLuBMfAQEvXmSnKSyjgiHUfceLkgiypWRupsgDFLnemGq9WzMq8nHbEYiWm4896QHqyq3LaFwRgdPLwHqWc7",
+    "slot": "350000002",
+    "block_time": "2026-01-15T12:00:02.000000Z",
+    "transaction_index": 1,
+    "err": null,
+    "fee_payer": "T6r5qiKru3uPurhG2Ypk753Uekb145nBDqcXiwu2fD1",
+    "account_keys": [
+      "T6r5qiKru3uPurhG2Ypk753Uekb145nBDqcXiwu2fD1",
+      "JCiSCTCYdQPUs88TqM9jNee1hMpDCxk3zis9qQgrZsGr",
+      "3ruE2udynYZBVAdTPe2vHWT74msBW5UXBXVWfbK1Gust",
+      "9EiH4N5NgbbaWcVTvA2sjdpWGfrxA64uNhPXQCsYpZBM",
+      "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+      "So11111111111111111111111111111111111111112",
+      "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+    ],
+    "loaded_writable_addresses": [],
+    "loaded_readonly_addresses": [],
+    "instructions": [
+      {
+        "program_id": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+        "accounts": [
+          "3ruE2udynYZBVAdTPe2vHWT74msBW5UXBXVWfbK1Gust",
+          "JCiSCTCYdQPUs88TqM9jNee1hMpDCxk3zis9qQgrZsGr",
+          "T6r5qiKru3uPurhG2Ypk753Uekb145nBDqcXiwu2fD1",
+          "9EiH4N5NgbbaWcVTvA2sjdpWGfrxA64uNhPXQCsYpZBM",
+          "So11111111111111111111111111111111111111112"
+        ],
+        "data_base64": "AQ==",
+        "stack_height": 1
+      }
+    ],
+    "inner_instructions": [
+      {
+        "index": 0,
+        "instructions": [
+          {
+            "program_id": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+            "accounts": [
+              "9EiH4N5NgbbaWcVTvA2sjdpWGfrxA64uNhPXQCsYpZBM",
+              "JCiSCTCYdQPUs88TqM9jNee1hMpDCxk3zis9qQgrZsGr",
+              "T6r5qiKru3uPurhG2Ypk753Uekb145nBDqcXiwu2fD1"
+            ],
+            "data_base64": "Ag==",
+            "stack_height": 2
+          }
+        ]
+      }
+    ],
+    "log_messages": [
+      "Program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P invoke [1]",
+      "Program log: Instruction: Buy",
+      "Program log: SYNTHETIC FIXTURE — not a live mainnet transaction",
+      "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA invoke [2]",
+      "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA success",
+      "Program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P success"
+    ],
+    "pre_balances": [1500000000, 1461600, 890880, 2039280, 1, 1, 1],
+    "post_balances": [1490000000, 1461600, 1890880, 2039280, 1, 1, 1],
+    "pre_token_balances": [],
+    "post_token_balances": [
+      {
+        "accountIndex": 3,
+        "mint": "JCiSCTCYdQPUs88TqM9jNee1hMpDCxk3zis9qQgrZsGr",
+        "owner": "T6r5qiKru3uPurhG2Ypk753Uekb145nBDqcXiwu2fD1",
+        "uiTokenAmount": {
+          "amount": "1000000000",
+          "decimals": 6,
+          "uiAmount": null,
+          "uiAmountString": "1000"
+        }
+      }
+    ],
+    "compute_units_consumed": 61000,
+    "raw_json": {
+      "synthetic": true,
+      "label": "not-live-mainnet",
+      "scenario": "buy"
+    }
+  },
+  {
+    "signature": "558VFrEkkov1LiGBjXBrFLt9ckeNCuF6H5W6XQ5XjVbdED4UQPH1ZXNkbiRCp89ZDqh48RvYPHArxtmysyV1wBgd",
+    "slot": "350000003",
+    "block_time": "2026-01-15T12:00:05.000000Z",
+    "transaction_index": 0,
+    "err": null,
+    "fee_payer": "T6r5qiKru3uPurhG2Ypk753Uekb145nBDqcXiwu2fD1",
+    "account_keys": [
+      "T6r5qiKru3uPurhG2Ypk753Uekb145nBDqcXiwu2fD1",
+      "JCiSCTCYdQPUs88TqM9jNee1hMpDCxk3zis9qQgrZsGr",
+      "3ruE2udynYZBVAdTPe2vHWT74msBW5UXBXVWfbK1Gust",
+      "99jb4emrN2msBYEtpPqRt9r9fq2kuPAjT6daeH8Ysefu",
+      "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+      "So11111111111111111111111111111111111111112",
+      "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+    ],
+    "loaded_writable_addresses": [],
+    "loaded_readonly_addresses": [],
+    "instructions": [
+      {
+        "program_id": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+        "accounts": [
+          "3ruE2udynYZBVAdTPe2vHWT74msBW5UXBXVWfbK1Gust",
+          "JCiSCTCYdQPUs88TqM9jNee1hMpDCxk3zis9qQgrZsGr",
+          "T6r5qiKru3uPurhG2Ypk753Uekb145nBDqcXiwu2fD1",
+          "99jb4emrN2msBYEtpPqRt9r9fq2kuPAjT6daeH8Ysefu",
+          "So11111111111111111111111111111111111111112"
+        ],
+        "data_base64": "Ag==",
+        "stack_height": 1
+      }
+    ],
+    "inner_instructions": [],
+    "log_messages": [
+      "Program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P invoke [1]",
+      "Program log: Instruction: Sell",
+      "Program log: SYNTHETIC FIXTURE — not a live mainnet transaction",
+      "Program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P success"
+    ],
+    "pre_balances": [1490000000, 1461600, 1890880, 2039280, 1, 1, 1],
+    "post_balances": [1494000000, 1461600, 1490880, 2039280, 1, 1, 1],
+    "pre_token_balances": [
+      {
+        "accountIndex": 3,
+        "mint": "JCiSCTCYdQPUs88TqM9jNee1hMpDCxk3zis9qQgrZsGr",
+        "owner": "T6r5qiKru3uPurhG2Ypk753Uekb145nBDqcXiwu2fD1",
+        "uiTokenAmount": {
+          "amount": "1000000000",
+          "decimals": 6,
+          "uiAmount": null,
+          "uiAmountString": "1000"
+        }
+      }
+    ],
+    "post_token_balances": [
+      {
+        "accountIndex": 3,
+        "mint": "JCiSCTCYdQPUs88TqM9jNee1hMpDCxk3zis9qQgrZsGr",
+        "owner": "T6r5qiKru3uPurhG2Ypk753Uekb145nBDqcXiwu2fD1",
+        "uiTokenAmount": {
+          "amount": "400000000",
+          "decimals": 6,
+          "uiAmount": null,
+          "uiAmountString": "400"
+        }
+      }
+    ],
+    "compute_units_consumed": 54000,
+    "raw_json": {
+      "synthetic": true,
+      "label": "not-live-mainnet",
+      "scenario": "sell"
+    }
+  }
+]

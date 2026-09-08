@@ -1,0 +1,65 @@
+schema_version: 1
+feature_schema_version: features-v1
+observation_windows_seconds: [5, 15, 30, 60, 120, 300]
+point_in_time: true
+future_leakage: forbidden
+availability_rule: available_from_slot_le_cutoff_and_known_at_le_knowledge_cutoff
+amount_math: integer_atomic
+unknown_is_valid: true
+families:
+  market:
+    - age_seconds
+    - curve_progress
+    - round_trip_cost_fraction
+    - entry_impact_bps
+  flow:
+    windows: [5, 15, 30, 60, 120, 300]
+    names:
+      - buy_count
+      - sell_count
+      - buy_quote
+      - sell_quote
+      - buy_sell_imbalance
+      - unique_buyers
+      - buyer_arrival_rate
+      - buyer_arrival_acceleration
+      - repeat_buyer_ratio
+      - buyer_retention
+      - wallet_churn
+      - buy_size_p10
+      - buy_size_p50
+      - buy_size_p90
+      - buy_size_cv
+      - interarrival_cv
+      - sell_acceleration
+      - largest_seller_share
+      - return
+      - realized_volatility
+      - net_creator_flow
+  concentration:
+    - holder_top_1_share
+    - holder_top_5_share
+    - holder_top_10_share
+    - holder_hhi
+    - cluster_hhi
+    - independent_cluster_count
+    - creator_linked_supply_share
+    - fresh_wallet_share
+    - immediate_funding_share
+  graph:
+    - funding_diversity
+    - cohort_recurrence
+    - co_buy_density
+    - weighted_degree_concentration
+    - cohort_modularity
+    - smart_wallet_retention
+    - wallet_skill_posterior_mean
+    - wallet_skill_effective_sample
+    - creator_graduation_posterior
+    - creator_collapse_posterior
+    - history_coverage_fraction
+missingness:
+  divide_by_zero: null_plus_indicator
+  incomplete_window: null
+  invented_prices: forbidden
+quality_grades: [A, B, C, UNAVAILABLE]

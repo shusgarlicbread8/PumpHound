@@ -1,0 +1,69 @@
+:root {
+  --canvas: #090b0e;
+  --surface-1: #0f1318;
+  --surface-2: #151b22;
+  --hairline: #26303a;
+  --text: #e7edf3;
+  --secondary: #8f9ba8;
+  --amber: #f3a83b;
+  --positive: #46d39a;
+  --negative: #ff667a;
+  --info: #63a7ff;
+  --unknown: #8b7e9e;
+  --radius: 6px;
+  --space: 4px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--canvas);
+  color: var(--text);
+  font-family: "Inter Variable", Inter, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 13px;
+  line-height: 18px;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+a:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
+}
+
+.tabular,
+.font-mono {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+::selection {
+  background: #f3a83b44;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #26303a;
+  border-radius: 6px;
+}

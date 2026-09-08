@@ -1,0 +1,41 @@
+schema_version: 1
+algorithm_version: graph-v1
+events_uri: fixtures/replay/events.jsonl
+knowledge_cutoff: 2026-09-01T06:00:00.000000Z
+cutoff_slot: 4000
+output_uri: artifacts/graph
+observation_windows_seconds: [5, 15, 30, 60, 300]
+funding:
+  max_hops: 3
+  max_transfers_per_wallet: 100
+  lookback_days: 30
+  materiality_native_atomic: "100000"
+  ignore_roles: [rent, fee, trade_settlement]
+  stop_at_hubs: true
+cooccurrence:
+  durable_min_score: 0.65
+  durable_min_shared_launches: 3
+  weights:
+    recurrence: 0.25
+    timing_similarity: 0.20
+    size_similarity: 0.10
+    common_funding: 0.20
+    co_sell_recurrence: 0.15
+    creator_overlap: 0.10
+  timing_scale_seconds: 2.0
+hubs:
+  high_degree_threshold: 40
+  known_types: [exchange, bridge, launchpad, router, fee, service]
+communities:
+  method: leiden
+  resolution: 1.0
+  funding_family_min_confidence: 0.85
+reputation:
+  prior_alpha: 1.0
+  prior_beta: 3.0
+  recency_half_life_days: 21
+lineage:
+  family_overlap_threshold: 0.60
+identity:
+  never_merge_wallets: true
+  cluster_is_not_ownership: true

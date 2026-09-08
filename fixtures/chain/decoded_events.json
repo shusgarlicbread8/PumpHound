@@ -1,0 +1,178 @@
+{
+  "label": "SYNTHETIC — not live mainnet",
+  "decoder_version": "pump-idl-2026-09-07",
+  "idl_sha256": "b90bc471327f671449271d5d1d42354d1fae6f5a06502f5834459a3108138e49",
+  "purpose": "Small canonical event set for replay and decoder-contract tests. Instruction bytes are placeholders and must not be treated as observed chain data.",
+  "events": [
+    {
+      "schema_version": 1,
+      "event_id": "c0ffee0000000000000000000000000000000000000000000000000000000001",
+      "revision": 1,
+      "action": "UPSERT",
+      "chain": "solana-mainnet",
+      "protocol": "pump_curve",
+      "program_id": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+      "signature": "5cwcxnHZREH8T7paF3wMcreei4TCUt2R955EgZuCMfsJMRToa7KbaDMTFaHyM3S3P1Qn35Bm1SyyKmSWCpKyMCah",
+      "slot": "350000001",
+      "blockhash": null,
+      "tx_index": 0,
+      "instruction_path": [0],
+      "event_index": 0,
+      "block_time": "2026-01-15T12:00:00.000000Z",
+      "observed_at": "2026-01-15T12:00:00.200000Z",
+      "computed_at": "2026-01-15T12:00:00.250000Z",
+      "available_from_slot": "350000001",
+      "commitment": "finalized",
+      "canonicality": "canonical",
+      "transaction_succeeded": true,
+      "provenance": {
+        "source": "replay",
+        "source_record_id": "fixtures/chain/sample_logs.json#0",
+        "payload_sha256": "synthetic-create-placeholder",
+        "decoder_version": "pump-idl-2026-09-07",
+        "idl_sha256": "b90bc471327f671449271d5d1d42354d1fae6f5a06502f5834459a3108138e49",
+        "raw_partition_uri": "fixtures/chain/sample_logs.json"
+      },
+      "payload": {
+        "kind": "launch.created",
+        "launch_id": "01900000-0000-7000-8000-00000000f001",
+        "mint": "JCiSCTCYdQPUs88TqM9jNee1hMpDCxk3zis9qQgrZsGr",
+        "creator": "2brAfKg9iR83ZZVtKCFiSnUBbTJjKCEF7YToWHCNne6V",
+        "market": "3ruE2udynYZBVAdTPe2vHWT74msBW5UXBXVWfbK1Gust",
+        "quote_mint": "So11111111111111111111111111111111111111112",
+        "base_decimals": 6,
+        "quote_decimals": 9,
+        "supply_atomic": "1000000000000000",
+        "metadata_uri": "https://example.invalid/synthetic-token.json",
+        "name": "SYNTH",
+        "symbol": "SYN",
+        "protocol_flags": { "synthetic": true },
+        "virtual_base_atomic": "1073000000000000",
+        "virtual_quote_atomic": "30000000000",
+        "real_base_atomic": "793100000000000"
+      }
+    },
+    {
+      "schema_version": 1,
+      "event_id": "c0ffee0000000000000000000000000000000000000000000000000000000002",
+      "revision": 1,
+      "action": "UPSERT",
+      "chain": "solana-mainnet",
+      "protocol": "pump_curve",
+      "program_id": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+      "signature": "2npmMLuBMfAQEvXmSnKSyjgiHUfceLkgiypWRupsgDFLnemGq9WzMq8nHbEYiWm4896QHqyq3LaFwRgdPLwHqWc7",
+      "slot": "350000002",
+      "blockhash": null,
+      "tx_index": 1,
+      "instruction_path": [0],
+      "event_index": 0,
+      "block_time": "2026-01-15T12:00:02.000000Z",
+      "observed_at": "2026-01-15T12:00:02.180000Z",
+      "computed_at": "2026-01-15T12:00:02.220000Z",
+      "available_from_slot": "350000002",
+      "commitment": "finalized",
+      "canonicality": "canonical",
+      "transaction_succeeded": true,
+      "provenance": {
+        "source": "replay",
+        "source_record_id": "fixtures/chain/sample_logs.json#1",
+        "payload_sha256": "synthetic-buy-placeholder",
+        "decoder_version": "pump-idl-2026-09-07",
+        "idl_sha256": "b90bc471327f671449271d5d1d42354d1fae6f5a06502f5834459a3108138e49",
+        "raw_partition_uri": "fixtures/chain/sample_logs.json"
+      },
+      "payload": {
+        "kind": "trade.executed",
+        "launch_id": "01900000-0000-7000-8000-00000000f001",
+        "mint": "JCiSCTCYdQPUs88TqM9jNee1hMpDCxk3zis9qQgrZsGr",
+        "market": "3ruE2udynYZBVAdTPe2vHWT74msBW5UXBXVWfbK1Gust",
+        "trader": "T6r5qiKru3uPurhG2Ypk753Uekb145nBDqcXiwu2fD1",
+        "fee_payer": "T6r5qiKru3uPurhG2Ypk753Uekb145nBDqcXiwu2fD1",
+        "side": "buy",
+        "base_amount_atomic": "1000000000",
+        "quote_amount_atomic": "10000000",
+        "quote_mint": "So11111111111111111111111111111111111111112",
+        "fee_components": [
+          {
+            "kind": "protocol",
+            "asset": {
+              "mint": "So11111111111111111111111111111111111111112",
+              "atomic": "100000",
+              "decimals": 9
+            },
+            "schedule_version": "synthetic-fee-v0",
+            "charged_on_failure": false
+          }
+        ],
+        "reserve_snapshot_id": "synth-snap-350000002",
+        "instruction_name": "buy",
+        "virtual_base_atomic": "1072999000000000",
+        "virtual_quote_atomic": "30010000000",
+        "real_base_atomic": "793099000000000",
+        "real_quote_atomic": "10000000",
+        "raw_event": { "synthetic": true, "ix_name": "buy" }
+      }
+    },
+    {
+      "schema_version": 1,
+      "event_id": "c0ffee0000000000000000000000000000000000000000000000000000000003",
+      "revision": 1,
+      "action": "UPSERT",
+      "chain": "solana-mainnet",
+      "protocol": "pump_curve",
+      "program_id": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+      "signature": "558VFrEkkov1LiGBjXBrFLt9ckeNCuF6H5W6XQ5XjVbdED4UQPH1ZXNkbiRCp89ZDqh48RvYPHArxtmysyV1wBgd",
+      "slot": "350000003",
+      "blockhash": null,
+      "tx_index": 0,
+      "instruction_path": [0],
+      "event_index": 0,
+      "block_time": "2026-01-15T12:00:05.000000Z",
+      "observed_at": "2026-01-15T12:00:05.160000Z",
+      "computed_at": "2026-01-15T12:00:05.190000Z",
+      "available_from_slot": "350000003",
+      "commitment": "finalized",
+      "canonicality": "canonical",
+      "transaction_succeeded": true,
+      "provenance": {
+        "source": "replay",
+        "source_record_id": "fixtures/chain/sample_logs.json#2",
+        "payload_sha256": "synthetic-sell-placeholder",
+        "decoder_version": "pump-idl-2026-09-07",
+        "idl_sha256": "b90bc471327f671449271d5d1d42354d1fae6f5a06502f5834459a3108138e49",
+        "raw_partition_uri": "fixtures/chain/sample_logs.json"
+      },
+      "payload": {
+        "kind": "trade.executed",
+        "launch_id": "01900000-0000-7000-8000-00000000f001",
+        "mint": "JCiSCTCYdQPUs88TqM9jNee1hMpDCxk3zis9qQgrZsGr",
+        "market": "3ruE2udynYZBVAdTPe2vHWT74msBW5UXBXVWfbK1Gust",
+        "trader": "T6r5qiKru3uPurhG2Ypk753Uekb145nBDqcXiwu2fD1",
+        "fee_payer": "T6r5qiKru3uPurhG2Ypk753Uekb145nBDqcXiwu2fD1",
+        "side": "sell",
+        "base_amount_atomic": "600000000",
+        "quote_amount_atomic": "4000000",
+        "quote_mint": "So11111111111111111111111111111111111111112",
+        "fee_components": [
+          {
+            "kind": "protocol",
+            "asset": {
+              "mint": "So11111111111111111111111111111111111111112",
+              "atomic": "40000",
+              "decimals": 9
+            },
+            "schedule_version": "synthetic-fee-v0",
+            "charged_on_failure": false
+          }
+        ],
+        "reserve_snapshot_id": "synth-snap-350000003",
+        "instruction_name": "sell",
+        "virtual_base_atomic": "1072999600000000",
+        "virtual_quote_atomic": "30006000000",
+        "real_base_atomic": "793099600000000",
+        "real_quote_atomic": "6000000",
+        "raw_event": { "synthetic": true, "ix_name": "sell" }
+      }
+    }
+  ]
+}

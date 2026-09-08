@@ -1,0 +1,107 @@
+# Initial bounded supervised experiment. Not an expected performance claim.
+schema_version: 1
+experiment_name: pumphound-tabular-v1
+random_seed: 42
+dataset_uri: artifacts/datasets/corpus-v1
+artifact_uri: artifacts/models/candidates
+registry_uri: artifacts/models/registry.json
+train_report_uri: artifacts/models/train-report.json
+observation_windows_seconds: [5, 15, 30, 60, 120, 300]
+feature_schema_version: features-v1
+targets:
+  - graduated_by_6h_v1
+  - up_50_before_down_20_15m_v1
+  - severe_collapse_1h_v1
+  - exit_hazard_60s_v1
+
+dataset:
+  require_finalized_labels: true
+  include_dead_and_inactive_launches: true
+  exclude_ambiguous_labels: true
+  retain_censored_for_survival_models: true
+  feature_availability: bitemporal
+  amount_math_source: shared_rust_domain
+  provenance_required: true
+  training_input_format: parquet
+
+split:
+  method: chronological_purged_walk_forward
+  fractions:
+    train: 0.60
+    validation: 0.15
+    calibration: 0.10
+    test: 0.15
+  purge_overlapping_label_intervals: true
+  minimum_boundary_embargo_seconds: 900
+  actual_embargo_rule: max_configured_target_horizon_plus_persistence_and_coverage_buffer
+  group_diagnostics: [creator, cluster_family, metadata_duplicate_family]
+  secondary_holdout: unseen_creator_and_cluster_family
+  random_row_split: false
+  minimum_complete_calendar_days: 14
+  insufficient_history_action: RESEARCH_ONLY_NO_PROMOTION
+
+baselines: [base_rate, momentum_rule, graduation_rule, wallet_rule, logistic_regression]
+xgboost:
+  objective: binary:logistic
+  eval_metric: logloss
+  tree_method: hist
+  device: cpu
+  n_estimators: 2000
+  learning_rate: 0.03
+  max_depth: 4
+  min_child_weight: 10
+  subsample: 0.8
+  colsample_bytree: 0.8
+  reg_lambda: 5.0
+  early_stopping_rounds: 100
+tuning:
+  enabled: false
+  optuna_trials_per_target_window: 30
+  maximum_parallel_jobs: 2
+  never_read_test_metrics_during_search: true
+calibration:
+  default_method: sigmoid
+  isotonic_minimum_calibration_rows: 5000
+  isotonic_minimum_each_class: 200
+  fit_on_calibration_split_only: true
+  metrics: [log_loss, brier, pr_auc, roc_auc, ece, precision_at_top_1pct, precision_at_top_5pct, precision_at_top_10pct]
+familiarity:
+  minimum_score: 0.65
+training_requirements:
+  minimum_rows_per_split:
+    train: 200
+    validation: 50
+    calibration: 50
+    test: 50
+  minimum_each_class_per_split: 10
+threshold_costs:
+  true_positive_value: 1.0
+  false_positive_cost: 1.0
+  false_negative_cost: 0.25
+  action_cost: 0.02
+evaluation:
+  bootstrap_unit: day_and_cluster_family
+  bootstrap_replicates: 1000
+  feature_family_ablations: [market, market_curve, market_creator, market_wallet, market_holders, market_graph, all]
+  top_winner_removal: [top_3, top_5, top_1_percent]
+  costs: [base, pessimistic, latency_stress]
+promotion:
+  automatic: false
+  initial_status: candidate
+  require_compatible_feature_schema: true
+  require_complete_model_card: true
+  require_held_out_report: true
+  require_explicit_reason: true
+  gates:
+    minimum_matured_samples: 10000
+    minimum_positives: 250
+    require_calibration: true
+    maximum_calibration_ece: 0.08
+    require_policy_threshold: true
+    held_out_metrics:
+      roc_auc: {min: 0.60}
+      pr_auc: {min: 0.15}
+      log_loss: {max: 0.65}
+      brier: {max: 0.22}
+      ece: {max: 0.08}
+

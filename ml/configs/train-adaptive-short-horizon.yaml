@@ -1,0 +1,77 @@
+schema_version: 1
+experiment_name: adaptive-short-horizon-v1
+training_mode: candidate
+random_seed: 42
+dataset_uri: artifacts/datasets/adaptive/dataset-4633abd6116efd819722340f5b17a4ef
+artifact_uri: artifacts/models/adaptive/candidates
+registry_uri: artifacts/models/registry.json
+train_report_uri: artifacts/models/adaptive/train-report.json
+feature_schema_version: features-v1
+serving_feature_names:
+  - age_seconds
+  - buy_count_30
+  - buy_count_60
+  - buy_count_120
+  - sell_count_30
+  - sell_count_60
+  - sell_count_120
+  - buy_sell_imbalance_30
+  - buy_sell_imbalance_60
+  - unique_buyers_30
+  - unique_buyers_60
+  - return_30
+targets:
+  - short_momentum_2m_v1
+  - adverse_move_2m_v1
+  - expected_mfe_5m_v1
+xgboost:
+  objective: binary:logistic
+  eval_metric: logloss
+  tree_method: hist
+  device: cpu
+  n_estimators: 300
+  learning_rate: 0.05
+  max_depth: 4
+  min_child_weight: 3
+  subsample: 0.8
+  colsample_bytree: 0.8
+  reg_lambda: 5.0
+  early_stopping_rounds: 30
+tuning:
+  enabled: false
+calibration:
+  default_method: sigmoid
+  isotonic_minimum_calibration_rows: 500
+  isotonic_minimum_each_class: 25
+  fit_on_calibration_split_only: true
+familiarity:
+  minimum_score: 0.65
+confidence_intervals:
+  method: deterministic_percentile_bootstrap
+  bootstrap_repeats: 100
+  confidence: 0.95
+small_sample_warnings:
+  minimum_matured_rows: 200
+  minimum_positives: 30
+  minimum_rows_per_split: 30
+training_requirements:
+  minimum_rows_per_split:
+    train: 4
+    validation: 2
+    calibration: 2
+    test: 2
+  minimum_each_class_per_split: 1
+threshold_costs:
+  true_positive_value: 1.0
+  false_positive_cost: 1.0
+  false_negative_cost: 0.25
+  action_cost: 0.02
+promotion:
+  automatic: false
+  initial_status: candidate
+  gates:
+    minimum_matured_samples: 10000
+    minimum_positives: 250
+    require_calibration: true
+    maximum_calibration_ece: 0.08
+    require_policy_threshold: true

@@ -1,0 +1,2 @@
+-- Superseded by 005_feature_snapshot_cutoff.sql.
+-- Kept as a harmless no-op for databases that have recorded this filename.

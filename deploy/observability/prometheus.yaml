@@ -1,0 +1,29 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    product: pumphound
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["127.0.0.1:9090"]
+
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8889"]
+
+  - job_name: nats
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["nats:8222"]
+
+  - job_name: core-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["core-api:8080"]
+    # /metrics is optional until the API exports Prometheus text.
+    # Scrape failures here are not a collector outage.
+
+  # ml-worker and investigator expose JSON /internal/health, not Prometheus
+  # text. Compose healthchecks cover them; do not scrape those paths here.

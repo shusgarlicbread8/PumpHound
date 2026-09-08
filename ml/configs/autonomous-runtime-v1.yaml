@@ -1,0 +1,18 @@
+schema_version: 1
+reviewed: true
+review_status: REVIEWED_RUNTIME_CONSTRAINTS
+mode: LIVE_WATCH
+activates_live_paper: false
+optimized_on_test: false
+source: human_reviewed_runtime_constraints
+constraints:
+  maximum_price_impact_bps: 100
+  minimum_liquidity_quote_atomic: 1000000000
+  maximum_creator_risk: 0.40
+  maximum_wallet_risk: 0.40
+  maximum_cluster_risk: 0.40
+  minimum_exit_liquidity_quote_atomic: 500000000
+  partial_exit_fraction: 0.50
+  arrival_delay_ms: 1000
+  maximum_arrival_wait_ms: 5000
+  fixed_order_quote_atomic: 100000000

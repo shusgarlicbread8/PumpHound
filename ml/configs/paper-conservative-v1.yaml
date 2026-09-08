@@ -1,0 +1,90 @@
+# Concrete research defaults, not an asserted profitable strategy.
+# Copy to ml/configs/paper-conservative-v1.yaml when Task 11 uses it.
+schema_version: 1
+policy_version: paper-conservative-v1
+mode: LIVE_PAPER
+auto_start: false
+prediction_source: heuristic
+allowed_protocols: [pump_curve, pump_swap]
+
+portfolio:
+  initial_budget_usd: "1000.00"
+  standard_order_usd: "15.00"
+  max_token_cost_basis_fraction: 0.05
+  max_gross_exposure_fraction: 0.15
+  max_creator_or_cluster_exposure_fraction: 0.075
+  daily_loss_breaker_fraction: 0.05
+  peak_drawdown_breaker_fraction: 0.15
+  day_boundary_timezone: UTC
+  averaging_down: false
+  leverage: false
+  lot_method: FIFO
+
+quality:
+  minimum_grade: B
+  maximum_chain_lag_ms: 2000
+  maximum_market_lag_ms: 1000
+  require_exact_ordering: true
+  maximum_quote_age_ms: 1000
+  maximum_usd_reference_age_ms: 30000
+  unknown_required_feature_action: ABSTAIN
+  incompatible_decoder_action: FREEZE_NEW_ENTRIES
+
+entry:
+  minimum_age_seconds: 30
+  maximum_age_seconds: 900
+  minimum_unique_buyers: 25
+  minimum_buy_sell_imbalance_30s: 0.20
+  minimum_return_30s: 0.05
+  maximum_return_30s: 0.50
+  maximum_top_holder_fraction: 0.15
+  maximum_single_order_effective_quote_reserve_fraction: 0.005
+  maximum_total_position_effective_quote_reserve_fraction: 0.01
+  maximum_slippage_bps: 100
+  maximum_round_trip_cost_fraction: 0.06
+  graph_gate_enabled: false
+  minimum_independent_clusters_when_enabled: 15
+  maximum_creator_linked_supply_fraction_when_enabled: 0.10
+
+model_gate:
+  enabled: false
+  required_calibrated: true
+  maximum_severe_collapse_1h_probability: 0.15
+  minimum_expected_net_return_15m: 0.03
+  minimum_net_edge_lower_bound: 0.00
+  require_out_of_sample_promotion: true
+
+simulation:
+  latency_mode: fixed_assumption
+  arrival_delay_ms: 1000
+  random_seed: 7
+  fee_schedule_source: versioned_chain_configuration
+  priority_fee_source: observed_recent_distribution
+  missing_priority_fee_action: REQUIRE_EXPLICIT_SCENARIO
+  tip_mode: none
+  impact_mode: bounded_shadow
+  atomic_swap_partial_fills: false
+  failed_transaction_costs: status_dependent
+  canonical_corrections: append_new_branch
+
+exits:
+  evaluation_interval_ms: 250
+  stop_loss_fraction: 0.15
+  take_profit_stages:
+    - return_fraction: 0.25
+      fraction_of_original_position: 0.50
+    - return_fraction: 0.50
+      fraction_of_original_position: 0.25
+  trailing_stop_from_executable_peak_fraction: 0.15
+  trailing_activation_return_fraction: 0.25
+  maximum_hold_seconds: 900
+  model_hazard_enabled: false
+  graph_emergency_enabled: false
+  keep_exits_active_during_entry_breaker: true
+  precedence: [protocol_incompatible, liquidity_emergency, hard_stop, model_hazard, graph_emergency, trailing_stop, staged_profit, time_stop]
+
+alerts:
+  cooldown_seconds: 60
+  desktop_notifications: true
+  external_messages: false
+

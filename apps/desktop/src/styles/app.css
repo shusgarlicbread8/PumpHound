@@ -1,0 +1,19 @@
+@import "./tokens.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.panel {
+  background: #0f1318;
+  border: 1px solid #26303a;
+  border-radius: 6px;
+}
+
+.label {
+  font-size: 12px;
+  line-height: 16px;
+  color: #8f9ba8;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}

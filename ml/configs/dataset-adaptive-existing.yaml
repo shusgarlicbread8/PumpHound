@@ -1,0 +1,23 @@
+schema_version: 1
+dataset_version: adaptive-short-horizon-v1
+feature_schema_version: features-v1
+corpus_kind: existing_canonical_adaptive
+promotion_eligible: false
+source_dataset_uri: artifacts/datasets/existing-shadow-v1
+snapshot_root: artifacts/datasets/adaptive
+event_sources:
+  - name: historical-canonical
+    uri: data/history-helius-full-25k/canonical/events.jsonl
+    manifest_uri: data/history-helius-full-25k/corpus-manifest.json
+    require_stable: true
+  - name: live-canonical-journal
+    uri: data/journal/events.jsonl
+    optional: true
+split:
+  method: inherited_chronological_purged_walk_forward
+  source_dataset: artifacts/datasets/existing-shadow-v1
+  random_row_split: false
+targets:
+  - short_momentum_2m_v1
+  - adverse_move_2m_v1
+  - expected_mfe_5m_v1

@@ -1,0 +1,40 @@
+{
+  "status": "MODEL WITHHELD",
+  "prediction_id": "partial-shadow-fixture",
+  "feature_snapshot_id": "snapshot-1",
+  "launch_id": "launch-1",
+  "observation_window_seconds": 60,
+  "authority": "SHADOW",
+  "live_paper_ml_eligible": false,
+  "probabilities": {
+    "graduated_by_6h_v1": 0.71,
+    "up_50_before_down_20_15m_v1": null,
+    "severe_collapse_1h_v1": null,
+    "exit_hazard_60s_v1": null
+  },
+  "target_model_versions": {
+    "graduated_by_6h_v1": "shadow-graduation",
+    "up_50_before_down_20_15m_v1": null,
+    "severe_collapse_1h_v1": null,
+    "exit_hazard_60s_v1": null
+  },
+  "familiarity": {
+    "graduated_by_6h_v1": 0.93,
+    "up_50_before_down_20_15m_v1": null,
+    "severe_collapse_1h_v1": null,
+    "exit_hazard_60s_v1": null
+  },
+  "withheld_reasons": {
+    "up_50_before_down_20_15m_v1": "missing_shadow",
+    "severe_collapse_1h_v1": "missing_shadow",
+    "exit_hazard_60s_v1": {
+      "code": "missing_shadow"
+    }
+  },
+  "explanations": {
+    "graduated_by_6h_v1": [],
+    "up_50_before_down_20_15m_v1": [],
+    "severe_collapse_1h_v1": {},
+    "exit_hazard_60s_v1": null
+  }
+}

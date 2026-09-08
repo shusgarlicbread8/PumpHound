@@ -1,0 +1,460 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pumphound.local/schemas/feature-schema-v1.json",
+  "title": "PumpHound FeatureVector v1",
+  "version": "features-v1",
+  "type": "object",
+  "required": [
+    "feature_snapshot_id",
+    "launch_id",
+    "observation_window_seconds",
+    "as_of",
+    "schema_version",
+    "values",
+    "dependency_ids",
+    "quality"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "feature_snapshot_id": { "type": "string" },
+    "launch_id": { "type": "string" },
+    "observation_window_seconds": { "type": "integer", "enum": [5, 15, 30, 60, 120, 300] },
+    "schema_version": { "type": "string", "const": "features-v1" },
+    "dependency_ids": { "type": "array", "items": { "type": "string" } },
+    "as_of": {
+      "type": "object",
+      "required": ["slot", "observed_at", "knowledge_cutoff"],
+      "properties": {
+        "slot": { "type": "string" },
+        "tx_index": { "type": ["integer", "null"] },
+        "event_index": { "type": ["integer", "null"] },
+        "event_time": { "type": ["string", "null"] },
+        "observed_at": { "type": "string" },
+        "knowledge_cutoff": { "type": "string" },
+        "commitment": { "type": "string" }
+      }
+    },
+    "quality": {
+      "type": "object",
+      "required": ["grade", "score"],
+      "properties": {
+        "grade": { "type": "string", "enum": ["A", "B", "C", "UNAVAILABLE"] },
+        "score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "chain_lag_ms": { "type": ["integer", "null"] },
+        "market_lag_ms": { "type": ["integer", "null"] },
+        "ordering": { "type": "string" },
+        "coverage": { "type": "string" },
+        "missing_fields": { "type": "array", "items": { "type": "string" } },
+        "stale_components": { "type": "array", "items": { "type": "string" } },
+        "reasons": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "values": {
+      "type": "object",
+      "additionalProperties": { "type": ["number", "null"] }
+    }
+  },
+  "feature_catalog": [
+    {
+      "name": "age_seconds",
+      "units": "seconds",
+      "formula": "cutoff_time - creation_time",
+      "windows": ["current"],
+      "missingness": "null if creation unknown"
+    },
+    {
+      "name": "curve_progress",
+      "units": "fraction",
+      "formula": "completed fraction under protocol reserve/completion definition; retain formula_id",
+      "windows": ["current"],
+      "missingness": "null if reserves unknown; never a fixed SOL threshold"
+    },
+    {
+      "name": "round_trip_cost_fraction",
+      "units": "fraction",
+      "formula": "(entry_cash - immediate_modeled_exit_cash) / entry_cash",
+      "windows": ["current"],
+      "missingness": "null if either route unsupported"
+    },
+    {
+      "name": "entry_impact_bps",
+      "units": "bps",
+      "formula": "execution-average versus pretrade marginal price",
+      "windows": ["current"],
+      "missingness": "null if state unknown"
+    },
+    {
+      "name": "buy_count_W",
+      "units": "count",
+      "formula": "successful buy counts in (t-W, t]",
+      "windows": [5, 15, 30, 60, 120, 300],
+      "missingness": "zero only when window coverage complete"
+    },
+    {
+      "name": "sell_count_W",
+      "units": "count",
+      "formula": "successful sell counts in (t-W, t]",
+      "windows": [5, 15, 30, 60, 120, 300],
+      "missingness": "zero only when window coverage complete"
+    },
+    {
+      "name": "buy_quote_W",
+      "units": "quote_atomic_normalized",
+      "formula": "sum of buy quote amounts",
+      "windows": [5, 15, 30, 60, 120, 300],
+      "missingness": "null on incomplete economic coverage"
+    },
+    {
+      "name": "sell_quote_W",
+      "units": "quote_atomic_normalized",
+      "formula": "sum of sell quote amounts",
+      "windows": [5, 15, 30, 60, 120, 300],
+      "missingness": "null on incomplete economic coverage"
+    },
+    {
+      "name": "buy_sell_imbalance_W",
+      "units": "fraction",
+      "formula": "(B-S)/(B+S)",
+      "windows": [30, 60, 300],
+      "missingness": "null when total volume zero"
+    },
+    {
+      "name": "unique_buyers_W",
+      "units": "count",
+      "formula": "distinct trader owner wallets",
+      "windows": [15, 30, 60, 300],
+      "missingness": "null if owner mapping incomplete"
+    },
+    {
+      "name": "buyer_arrival_rate_W",
+      "units": "per_second",
+      "formula": "newly observed buyers in W / W seconds",
+      "windows": [5, 15, 30, 60],
+      "missingness": "null on incomplete window"
+    },
+    {
+      "name": "buyer_arrival_acceleration",
+      "units": "per_second",
+      "formula": "current arrival rate - prior equal-window rate",
+      "windows": [15, 30],
+      "missingness": "null until both windows exist"
+    },
+    {
+      "name": "repeat_buyer_ratio_W",
+      "units": "fraction",
+      "formula": "buyers with at least two buys / unique buyers",
+      "windows": [30, 60, 300],
+      "missingness": "null if no buyers"
+    },
+    {
+      "name": "buyer_retention_W",
+      "units": "fraction",
+      "formula": "buyers still holding positive inventory / buyers",
+      "windows": [60, 300],
+      "missingness": "lower-bound/unknown if transfers unobserved"
+    },
+    {
+      "name": "wallet_churn_W",
+      "units": "fraction",
+      "formula": "full-exit sellers / starting holders",
+      "windows": [60, 300],
+      "missingness": "null if starting balance coverage absent"
+    },
+    {
+      "name": "buy_size_p10_W",
+      "units": "quote_normalized",
+      "formula": "p10 of buy quote amounts",
+      "windows": [30, 60, 300],
+      "missingness": "null if no trades"
+    },
+    {
+      "name": "buy_size_p50_W",
+      "units": "quote_normalized",
+      "formula": "p50 of buy quote amounts",
+      "windows": [30, 60, 300],
+      "missingness": "null if no trades"
+    },
+    {
+      "name": "buy_size_p90_W",
+      "units": "quote_normalized",
+      "formula": "p90 of buy quote amounts",
+      "windows": [30, 60, 300],
+      "missingness": "null if no trades"
+    },
+    {
+      "name": "buy_size_cv_W",
+      "units": "ratio",
+      "formula": "stdev / mean of buy sizes",
+      "windows": [30, 60],
+      "missingness": "null if fewer than two observations"
+    },
+    {
+      "name": "interarrival_cv_W",
+      "units": "ratio",
+      "formula": "stdev / mean of inter-trade gaps",
+      "windows": [30, 60],
+      "missingness": "null if fewer than three trades"
+    },
+    {
+      "name": "sell_acceleration_W",
+      "units": "quote_per_second",
+      "formula": "current sell quote/sec - previous equal-window sell quote/sec",
+      "windows": [15, 30, 60],
+      "missingness": "null if either window incomplete"
+    },
+    {
+      "name": "largest_seller_share_W",
+      "units": "fraction",
+      "formula": "max wallet sell quote / total sell quote",
+      "windows": [30, 60, 300],
+      "missingness": "null if no sells"
+    },
+    {
+      "name": "return_W",
+      "units": "fraction",
+      "formula": "current executable price / executable price W ago - 1",
+      "windows": [15, 30, 60, 300],
+      "missingness": "null if quote unavailable at either endpoint"
+    },
+    {
+      "name": "realized_volatility_W",
+      "units": "log_return_rms",
+      "formula": "sqrt(sum of squared log executable-price increments)",
+      "windows": [30, 60, 300],
+      "missingness": "null if gaps/order unresolved"
+    },
+    {
+      "name": "net_creator_flow_W",
+      "units": "quote_normalized",
+      "formula": "creator-linked buy quote - sell quote, link as-of cutoff",
+      "windows": [30, 60, 300],
+      "missingness": "null if graph required but absent"
+    },
+    {
+      "name": "holder_top_k_share",
+      "units": "fraction",
+      "formula": "sum of top k eligible holder balances / circulating eligible supply",
+      "windows": ["current"],
+      "k": [1, 5, 10],
+      "missingness": "covered-subset estimate if snapshot incomplete"
+    },
+    {
+      "name": "holder_hhi",
+      "units": "index",
+      "formula": "sum of squared eligible holder supply shares",
+      "windows": ["current"],
+      "missingness": "null if holder snapshot unavailable"
+    },
+    {
+      "name": "cluster_hhi",
+      "units": "index",
+      "formula": "HHI after high-confidence cluster aggregation",
+      "windows": ["current"],
+      "missingness": "null if cluster version absent"
+    },
+    {
+      "name": "independent_cluster_count",
+      "units": "count",
+      "formula": "high-confidence clusters + unclustered wallets",
+      "windows": ["current"],
+      "missingness": "null plus coverage field if history incomplete"
+    },
+    {
+      "name": "creator_linked_supply_share",
+      "units": "fraction",
+      "formula": "creator/linked cohort supply / eligible supply",
+      "windows": ["current"],
+      "missingness": "null if links unknown"
+    },
+    {
+      "name": "fresh_wallet_share",
+      "units": "fraction",
+      "formula": "early buyers first observed within 24h / early buyers",
+      "windows": ["current"],
+      "missingness": "null if first-observed coverage incomplete"
+    },
+    {
+      "name": "immediate_funding_share",
+      "units": "fraction",
+      "formula": "early buyers funded within 5 minutes before first buy / covered early buyers",
+      "windows": ["current"],
+      "missingness": "null if funding history incomplete"
+    },
+    {
+      "name": "funding_diversity",
+      "units": "effective_count",
+      "formula": "exp(Shannon entropy of material funding-source shares)",
+      "windows": ["current"],
+      "missingness": "null if funding coverage incomplete"
+    },
+    {
+      "name": "cohort_recurrence",
+      "units": "count",
+      "formula": "prior shared launches passing recurrence/timing rules, excluding current outcome",
+      "windows": ["current"],
+      "missingness": "null if graph snapshot absent"
+    },
+    {
+      "name": "co_buy_density",
+      "units": "fraction",
+      "formula": "durable behavioural edges / possible edges",
+      "windows": ["current"],
+      "missingness": "null if fewer than two buyers"
+    },
+    {
+      "name": "weighted_degree_concentration",
+      "units": "fraction",
+      "formula": "largest weighted degree / sum of degrees",
+      "windows": ["current"],
+      "missingness": "null if no edges"
+    },
+    {
+      "name": "cohort_modularity",
+      "units": "index",
+      "formula": "modularity of pinned weighted community run",
+      "windows": ["current"],
+      "missingness": "null if community run absent"
+    },
+    {
+      "name": "smart_wallet_retention",
+      "units": "fraction",
+      "formula": "reputation-weighted retained inventory / bought inventory",
+      "windows": ["current"],
+      "missingness": "null if reputation snapshot absent"
+    },
+    {
+      "name": "wallet_skill_posterior_mean",
+      "units": "probability",
+      "formula": "weighted mean of point-in-time reputation posteriors",
+      "windows": ["current"],
+      "missingness": "null if no matured wallet history"
+    },
+    {
+      "name": "wallet_skill_effective_sample",
+      "units": "count",
+      "formula": "effective sample size of reputation evidence",
+      "windows": ["current"],
+      "missingness": "null if no matured wallet history"
+    },
+    {
+      "name": "creator_graduation_posterior",
+      "units": "probability",
+      "formula": "shrunk graduation rate on matured prior launches",
+      "windows": ["current"],
+      "missingness": "null if creator history unknown"
+    },
+    {
+      "name": "creator_collapse_posterior",
+      "units": "probability",
+      "formula": "shrunk severe-collapse rate under pinned label definition",
+      "windows": ["current"],
+      "missingness": "null if creator history unknown"
+    },
+    {
+      "name": "history_coverage_fraction",
+      "units": "fraction",
+      "formula": "relevant wallets with required history range / relevant wallets",
+      "windows": ["current"],
+      "missingness": "zero is valid; unknown remains unknown"
+    }
+  ],
+  "ordered_feature_names": [
+    "age_seconds",
+    "curve_progress",
+    "round_trip_cost_fraction",
+    "entry_impact_bps",
+    "buy_count_5",
+    "buy_count_15",
+    "buy_count_30",
+    "buy_count_60",
+    "buy_count_120",
+    "buy_count_300",
+    "sell_count_5",
+    "sell_count_15",
+    "sell_count_30",
+    "sell_count_60",
+    "sell_count_120",
+    "sell_count_300",
+    "buy_quote_5",
+    "buy_quote_15",
+    "buy_quote_30",
+    "buy_quote_60",
+    "buy_quote_120",
+    "buy_quote_300",
+    "sell_quote_5",
+    "sell_quote_15",
+    "sell_quote_30",
+    "sell_quote_60",
+    "sell_quote_120",
+    "sell_quote_300",
+    "buy_sell_imbalance_30",
+    "buy_sell_imbalance_60",
+    "buy_sell_imbalance_300",
+    "unique_buyers_15",
+    "unique_buyers_30",
+    "unique_buyers_60",
+    "unique_buyers_300",
+    "buyer_arrival_rate_5",
+    "buyer_arrival_rate_15",
+    "buyer_arrival_rate_30",
+    "buyer_arrival_rate_60",
+    "buyer_arrival_acceleration_15",
+    "buyer_arrival_acceleration_30",
+    "repeat_buyer_ratio_30",
+    "repeat_buyer_ratio_60",
+    "repeat_buyer_ratio_300",
+    "buyer_retention_60",
+    "buyer_retention_300",
+    "wallet_churn_60",
+    "wallet_churn_300",
+    "buy_size_p10_30",
+    "buy_size_p50_30",
+    "buy_size_p90_30",
+    "buy_size_p10_60",
+    "buy_size_p50_60",
+    "buy_size_p90_60",
+    "buy_size_p10_300",
+    "buy_size_p50_300",
+    "buy_size_p90_300",
+    "buy_size_cv_30",
+    "buy_size_cv_60",
+    "interarrival_cv_30",
+    "interarrival_cv_60",
+    "sell_acceleration_15",
+    "sell_acceleration_30",
+    "sell_acceleration_60",
+    "largest_seller_share_30",
+    "largest_seller_share_60",
+    "largest_seller_share_300",
+    "return_15",
+    "return_30",
+    "return_60",
+    "return_300",
+    "realized_volatility_30",
+    "realized_volatility_60",
+    "realized_volatility_300",
+    "net_creator_flow_30",
+    "net_creator_flow_60",
+    "net_creator_flow_300",
+    "holder_top_1_share",
+    "holder_top_5_share",
+    "holder_top_10_share",
+    "holder_hhi",
+    "cluster_hhi",
+    "independent_cluster_count",
+    "creator_linked_supply_share",
+    "fresh_wallet_share",
+    "immediate_funding_share",
+    "funding_diversity",
+    "cohort_recurrence",
+    "co_buy_density",
+    "weighted_degree_concentration",
+    "cohort_modularity",
+    "smart_wallet_retention",
+    "wallet_skill_posterior_mean",
+    "wallet_skill_effective_sample",
+    "creator_graduation_posterior",
+    "creator_collapse_posterior",
+    "history_coverage_fraction"
+  ]
+}

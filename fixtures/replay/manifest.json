@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "kind": "deterministic_replay_manifest",
+  "label": "SYNTHETIC — not live mainnet",
+  "claim": "Fixture replay only. Do not treat fixture mints as live mainnet or as ownership evidence.",
+  "replay_id": "fixture-replay-v1",
+  "seed": 7,
+  "random_seed": 7,
+  "mode": "REPLAY",
+  "virtual_clock": true,
+  "same_engine_as_live": true,
+  "decoder_version": "pump-idl-2026-09-07",
+  "feature_schema_version": "features-v1",
+  "policy_version": "paper-conservative-v1",
+  "knowledge_cutoff": "2026-09-01T06:00:00.000000Z",
+  "events_uri": "fixtures/replay/events.jsonl",
+  "graph_config": "ml/configs/graph-v1.yaml",
+  "partitions": [
+    {
+      "uri": "fixtures/replay/events.jsonl",
+      "sha256": "be5f9deca95023f47754b9f2614404c3c1a04b181c0321eb0acb25b5316300ef",
+      "row_count": 72
+    },
+    {
+      "uri": "fixtures/chain/sample_logs.json",
+      "sha256": "9c2d72d7b923f4d240f299de71c5733c8b663429bf225bf6c64b96ecfb0ab88e",
+      "row_count": 3,
+      "record_contract": "RawTransaction"
+    }
+  ],
+  "raw_partitions": [
+    {
+      "uri": "fixtures/chain/sample_logs.json",
+      "sha256": "9c2d72d7b923f4d240f299de71c5733c8b663429bf225bf6c64b96ecfb0ab88e",
+      "row_count": 3
+    }
+  ],
+  "expected": {
+    "future_dependency_count": 0,
+    "duplicate_economic_trades": 0,
+    "deterministic_result_sha256": null,
+    "note": "Content hash is filled after the first successful same-seed replay."
+  },
+  "portfolio": {
+    "initial_quote_atomic": 2000000000
+  },
+  "scripted_orders": [
+    {
+      "launch_id": "launch-alpha",
+      "mint": "MintA11111111111111111111111111111111111111",
+      "side": "buy",
+      "input_atomic": 100000000,
+      "slot": 1100,
+      "at": "2026-09-01T00:02:00.000000Z",
+      "window": 60,
+      "min_out": 1
+    },
+    {
+      "launch_id": "launch-alpha",
+      "mint": "MintA11111111111111111111111111111111111111",
+      "side": "sell",
+      "input_atomic": 1000000,
+      "slot": 1400,
+      "at": "2026-09-01T00:04:00.000000Z",
+      "window": 60
+    }
+  ]
+}

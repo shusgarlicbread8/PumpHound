@@ -1,0 +1,9 @@
+{
+  "name": "pumphound",
+  "private": true,
+  "packageManager": "pnpm@10.15.0",
+  "scripts": {
+    "dev": "pnpm --filter @pumphound/desktop dev",
+    "build": "pnpm --filter @pumphound/desktop build"
+  }
+}

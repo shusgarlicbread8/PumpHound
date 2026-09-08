@@ -1,0 +1,6 @@
+schema_version: 1
+events_uri: fixtures/replay/events.jsonl
+graph_config: ml/configs/graph-v1.yaml
+knowledge_cutoff: 2026-09-01T06:00:00.000000Z
+cutoff_slot: 4000
+output_uri: artifacts/graph

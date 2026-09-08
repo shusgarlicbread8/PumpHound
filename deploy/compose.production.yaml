@@ -1,0 +1,326 @@
+# Always-on research runtime. Databases and NATS stay on the internal
+# overlay only. Publish the API and metrics on loopback (or a private
+# Tailscale/WireGuard address), never on a public 0.0.0.0 host bind.
+#
+# Start from the repository root:
+#   docker compose -f deploy/compose.production.yaml up -d
+#
+# Pin image digests after the first successful pull (see deploy-check.sh).
+# Do not put production secrets in this file.
+
+name: pumphound-prod
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pumphound}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-pumphound}
+    volumes:
+      - pumphound-pg:/var/lib/postgresql/data
+      - ../db/postgres/001_core.sql:/docker-entrypoint-initdb.d/001_core.sql:ro
+      - ../db/postgres/002_intelligence.sql:/docker-entrypoint-initdb.d/002_intelligence.sql:ro
+      - ../db/postgres/003_autonomous_paper.sql:/docker-entrypoint-initdb.d/003_autonomous_paper.sql:ro
+      - ../db/postgres/004_candidate_enrichment.sql:/docker-entrypoint-initdb.d/004_candidate_enrichment.sql:ro
+      - ../db/postgres/005_feature_snapshot_cutoff.sql:/docker-entrypoint-initdb.d/005_feature_snapshot_cutoff.sql:ro
+      - ../db/postgres/006_adaptive_learning.sql:/docker-entrypoint-initdb.d/006_adaptive_learning.sql:ro
+      - ../db/postgres/007_hot_set.sql:/docker-entrypoint-initdb.d/007_hot_set.sql:ro
+    networks: [private]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    deploy:
+      resources:
+        limits:
+          cpus: "2.00"
+          memory: 2G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    restart: unless-stopped
+    logging: *default-logging
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.1
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-pumphound}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-pumphound}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - pumphound-ch:/var/lib/clickhouse
+      - ../db/clickhouse/001_events.sql:/docker-entrypoint-initdb.d/001_events.sql:ro
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks: [private]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "clickhouse-client",
+          "--user",
+          "${CLICKHOUSE_USER:-pumphound}",
+          "--password",
+          "${CLICKHOUSE_PASSWORD}",
+          "--query",
+          "SELECT 1",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    deploy:
+      resources:
+        limits:
+          cpus: "4.00"
+          memory: 4G
+        reservations:
+          cpus: "0.50"
+          memory: 512M
+    restart: unless-stopped
+    logging: *default-logging
+
+  nats:
+    image: nats:2.11-alpine
+    command: ["-js", "-m", "8222", "-sd", "/data"]
+    volumes:
+      - pumphound-nats:/data
+    networks: [private]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 512M
+        reservations:
+          cpus: "0.10"
+          memory: 64M
+    restart: unless-stopped
+    logging: *default-logging
+
+  collector:
+    build:
+      context: ..
+      dockerfile: deploy/collector.Dockerfile
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      PUMPHOUND_MODE: ${PUMPHOUND_MODE:-LIVE_WATCH}
+      PUMPHOUND_DATA_DIR: /data
+      PUMPHOUND_POSTGRES_DSN: postgres://${POSTGRES_USER:-pumphound}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pumphound}
+      PUMPHOUND_CLICKHOUSE_URL: http://clickhouse:8123
+      PUMPHOUND_CLICKHOUSE_USER: ${CLICKHOUSE_USER:-pumphound}
+      PUMPHOUND_CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      PUMPHOUND_NATS_URL: nats://nats:4222
+      PUMPHOUND_ML_PREDICT_URL: http://ml-worker:8091/predict
+      PUMPHOUND_REPLAY_PATH: ${PUMPHOUND_REPLAY_PATH:-/fixtures/chain/sample_logs.json}
+    volumes:
+      - pumphound-data:/data
+      - ../fixtures:/fixtures:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    networks: [private]
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -x pumphound-collector >/dev/null"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "2.00"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    restart: unless-stopped
+    logging: *default-logging
+
+  core-api:
+    build:
+      context: ..
+      dockerfile: deploy/core-api.Dockerfile
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      PUMPHOUND_MODE: ${PUMPHOUND_MODE:-LIVE_WATCH}
+      PUMPHOUND_DATA_DIR: /data
+      PUMPHOUND_API_BIND: 0.0.0.0:8080
+      PUMPHOUND_POSTGRES_DSN: postgres://${POSTGRES_USER:-pumphound}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pumphound}
+      PUMPHOUND_CLICKHOUSE_URL: http://clickhouse:8123
+      PUMPHOUND_CLICKHOUSE_USER: ${CLICKHOUSE_USER:-pumphound}
+      PUMPHOUND_CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      PUMPHOUND_NATS_URL: nats://nats:4222
+    volumes:
+      - pumphound-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    networks: [private, edge]
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080/api/v1/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "2.00"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    restart: unless-stopped
+    logging: *default-logging
+
+  ml-worker:
+    build:
+      context: ..
+      dockerfile: deploy/ml-worker.Dockerfile
+    environment:
+      PUMPHOUND_MODE: ${PUMPHOUND_MODE:-LIVE_WATCH}
+      PUMPHOUND_ML_BIND: 0.0.0.0
+    networks: [private]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/internal/health')",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "2.00"
+          memory: 2G
+        reservations:
+          cpus: "0.10"
+          memory: 128M
+    restart: unless-stopped
+    logging: *default-logging
+
+  investigator:
+    build:
+      context: ..
+      dockerfile: deploy/investigator.Dockerfile
+    environment:
+      PUMPHOUND_AI_BASE_URL: ${PUMPHOUND_AI_BASE_URL:-}
+    networks: [private]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8092/internal/health')",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 1G
+        reservations:
+          cpus: "0.10"
+          memory: 64M
+    restart: unless-stopped
+    logging: *default-logging
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yaml
+      - --storage.tsdb.path=/prometheus
+      - --web.listen-address=0.0.0.0:9090
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./observability/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - pumphound-prom:/prometheus
+    networks: [private, edge]
+    ports:
+      - "127.0.0.1:9090:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+    restart: unless-stopped
+    logging: *default-logging
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.120.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./observability/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    networks: [private]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "-qO-",
+          "http://127.0.0.1:13133/",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+    restart: unless-stopped
+    logging: *default-logging
+
+networks:
+  # No host port publishes for stores. Not `internal: true` — collector must
+  # egress to Solana/Helius. Bind-publish only loopback on the edge network.
+  private:
+    driver: bridge
+  edge:
+    driver: bridge
+
+volumes:
+  pumphound-pg:
+  pumphound-ch:
+  pumphound-nats:
+  pumphound-data:
+  pumphound-prom:

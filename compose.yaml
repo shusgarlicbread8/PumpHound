@@ -1,0 +1,77 @@
+name: pumphound
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: pumphound
+      POSTGRES_PASSWORD: pumphound
+      POSTGRES_DB: pumphound
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - pumphound-pg:/var/lib/postgresql/data
+      - ./db/postgres/001_core.sql:/docker-entrypoint-initdb.d/001_core.sql:ro
+      - ./db/postgres/002_intelligence.sql:/docker-entrypoint-initdb.d/002_intelligence.sql:ro
+      - ./db/postgres/003_autonomous_paper.sql:/docker-entrypoint-initdb.d/003_autonomous_paper.sql:ro
+      - ./db/postgres/004_candidate_enrichment.sql:/docker-entrypoint-initdb.d/004_candidate_enrichment.sql:ro
+      - ./db/postgres/005_feature_snapshot_cutoff.sql:/docker-entrypoint-initdb.d/005_feature_snapshot_cutoff.sql:ro
+      - ./db/postgres/006_adaptive_learning.sql:/docker-entrypoint-initdb.d/006_adaptive_learning.sql:ro
+      - ./db/postgres/007_hot_set.sql:/docker-entrypoint-initdb.d/007_hot_set.sql:ro
+      - ./db/postgres/008_product_truth.sql:/docker-entrypoint-initdb.d/008_product_truth.sql:ro
+      - ./db/postgres/009_product_truth_indexes.sql:/docker-entrypoint-initdb.d/009_product_truth_indexes.sql:ro
+      - ./db/postgres/010_integrity_quarantines.sql:/docker-entrypoint-initdb.d/010_integrity_quarantines.sql:ro
+      - ./db/postgres/011_launch_identity_quarantine.sql:/docker-entrypoint-initdb.d/011_launch_identity_quarantine.sql:ro
+      - ./db/postgres/012_canonical_event_revisions.sql:/docker-entrypoint-initdb.d/012_canonical_event_revisions.sql:ro
+      - ./db/postgres/013_model_registry_integrity.sql:/docker-entrypoint-initdb.d/013_model_registry_integrity.sql:ro
+      - ./db/postgres/014_position_quarantine_propagation.sql:/docker-entrypoint-initdb.d/014_position_quarantine_propagation.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pumphound -d pumphound"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.1
+    environment:
+      CLICKHOUSE_DB: pumphound
+      CLICKHOUSE_USER: pumphound
+      CLICKHOUSE_PASSWORD: pumphound
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9009:9000"
+    volumes:
+      - pumphound-ch:/var/lib/clickhouse
+      - ./db/clickhouse/001_events.sql:/docker-entrypoint-initdb.d/001_events.sql:ro
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--user", "pumphound", "--password", "pumphound", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  nats:
+    image: nats:2.11-alpine
+    command: ["-js", "-m", "8222", "-sd", "/data"]
+    ports:
+      - "127.0.0.1:4222:4222"
+      - "127.0.0.1:8222:8222"
+    volumes:
+      - pumphound-nats:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  pumphound-pg:
+  pumphound-ch:
+  pumphound-nats:

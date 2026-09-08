@@ -1,0 +1,42 @@
+[package]
+name = "pumphound-collector"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pumphound-collector"
+path = "src/main.rs"
+
+[[bin]]
+name = "backfill"
+path = "src/bin/backfill.rs"
+
+[[bin]]
+name = "verify-live"
+path = "src/bin/verify_live.rs"
+
+[[bin]]
+name = "verify-archive"
+path = "src/bin/verify_archive.rs"
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+futures.workspace = true
+pumphound-chain-source.workspace = true
+pumphound-domain.workspace = true
+pumphound-protocol-pump.workspace = true
+pumphound-protocol-pumpswap.workspace = true
+pumphound-storage.workspace = true
+serde.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+base64.workspace = true

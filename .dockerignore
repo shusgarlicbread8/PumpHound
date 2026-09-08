@@ -1,0 +1,17 @@
+.git
+.cursor
+target
+node_modules
+data
+artifacts
+logs
+.env
+.env.local
+*.pem
+*.key
+PumpHound-Blueprint
+**/.DS_Store
+**/__pycache__
+.venv
+mlruns
+mlartifacts
