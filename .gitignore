@@ -5,6 +5,7 @@
 *.key
 
 # Data and artifacts
+/data
 /data/
 /data.mac-bak/
 /artifacts/*
