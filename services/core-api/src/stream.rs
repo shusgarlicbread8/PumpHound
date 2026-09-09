@@ -30,7 +30,10 @@ async fn client(socket: WebSocket, state: Arc<AppState>) {
                                 if let Some(arr) = v.get("topics").and_then(|x| x.as_array()) {
                                     topics = arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect();
                                 }
-                                let seq = state.next_seq().await;
+                                // Reports the current shared position without consuming a slot;
+                                // see current_seq() for why (a per-connection ack must not steal a
+                                // sequence number another connection's delta needs).
+                                let seq = state.current_seq().await;
                                 let snap = json!({
                                     "type": "snapshot",
                                     "schema_version": 1,
@@ -55,7 +58,7 @@ async fn client(socket: WebSocket, state: Arc<AppState>) {
                 }
             }
             _ = beat.tick() => {
-                let seq = state.next_seq().await;
+                let seq = state.current_seq().await;
                 let h = state.health.read().await;
                 let hb = json!({
                     "type": "heartbeat",
@@ -74,7 +77,12 @@ async fn client(socket: WebSocket, state: Arc<AppState>) {
             ev = rx.recv() => {
                 if let Ok(payload) = ev {
                     if topics.iter().any(|t| t == "radar") {
-                        let seq = state.next_seq().await;
+                        // seq was assigned once by the publisher (main.rs) at broadcast time, so
+                        // every connection that receives this same event reports the same number.
+                        let seq = payload
+                            .get("seq")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(state.current_seq().await);
                         let msg = json!({
                             "type": "delta",
                             "schema_version": 1,

@@ -59,6 +59,13 @@ function Group({ label, expanded }: { label: string; expanded: boolean }) {
   return <div className="mt-2 px-3 text-[10px] uppercase tracking-wide text-muted">{label}</div>;
 }
 
+// label.slice(0, 2) collides for Research/Replay (both "Re"); spell out an
+// explicit code per item instead so the collapsed rail stays unambiguous.
+const NAV_CODES: Record<string, string> = {
+  Research: "Rs",
+  Replay: "Rp",
+};
+
 function Item({
   to,
   label,
@@ -81,9 +88,11 @@ function Item({
       className={`mx-1 flex items-center gap-2 rounded px-2 py-1.5 text-body ${
         active ? "bg-amber/10 text-amber" : "text-muted hover:bg-surface2 hover:text-ink"
       }`}
-      title={hint}
+      title={expanded ? hint : label}
     >
-      <span className="w-8 shrink-0 text-center text-label">{label.slice(0, 2)}</span>
+      <span className="w-8 shrink-0 text-center text-label">
+        {NAV_CODES[label] ?? label.slice(0, 2)}
+      </span>
       {expanded ? <span>{label}</span> : null}
     </Link>
   );

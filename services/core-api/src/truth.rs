@@ -666,7 +666,11 @@ pub async fn trace(stores: &Stores, id: Uuid, q: &TraceQuery) -> anyhow::Result<
         struct Snapshot {
             snapshot_json: String,
         }
-        match stores.clickhouse.query("SELECT snapshot_json FROM market_snapshots WHERE snapshot_id=? ORDER BY computed_at DESC LIMIT 1").bind(&snapshot_id).fetch_optional::<Snapshot>().await {
+        // market_snapshots_buffer (db/clickhouse/002_insert_buffering.sql) transparently
+        // covers rows still sitting in the write buffer plus everything already flushed to
+        // the base table, so a snapshot looked up moments after it was written isn't
+        // wrongly reported as missing here.
+        match stores.clickhouse.query("SELECT snapshot_json FROM market_snapshots_buffer WHERE snapshot_id=? ORDER BY computed_at DESC LIMIT 1").bind(&snapshot_id).fetch_optional::<Snapshot>().await {
             Ok(Some(row))=>match serde_json::from_str::<Value>(&row.snapshot_json) {
                 Ok(payload)=> {let known=payload.get("computed_at").or_else(||payload.get("knowledge_cutoff")).cloned().unwrap_or(Value::Null);let at=payload.get("knowledge_cutoff").or_else(||payload.get("observed_at")).cloned().unwrap_or(Value::Null);
                     market_evidence.push(json!({"event_id":snapshot_id,"kind":"MARKET_SNAPSHOT","at":at,"known_at":known,"payload":payload}));},

@@ -211,6 +211,15 @@ impl AppState {
         *s += 1;
         *s
     }
+
+    /// Reads the current position in the shared delta sequence without
+    /// consuming a slot. Per-connection messages that aren't part of the
+    /// ordered broadcast log (heartbeats, subscribe acks) report this instead
+    /// of calling next_seq(), so they can't create a gap that only this one
+    /// connection would ever "recover" from.
+    pub async fn current_seq(&self) -> u64 {
+        *self.sequence.read().await
+    }
 }
 
 pub fn tape_event_price(quote_atomic: &str, base_atomic: &str) -> Option<f64> {

@@ -104,9 +104,14 @@ impl Stores {
         .await?;
 
         if !batch.rows.is_empty() {
+            // Writes go through the Buffer-engine table so many small per-batch
+            // inserts coalesce into fewer, larger MergeTree parts instead of
+            // burying the background merge executor (see
+            // db/clickhouse/002_insert_buffering.sql). Reads still hit the
+            // underlying table directly.
             let mut insert = self
                 .clickhouse
-                .insert("raw_sightings")
+                .insert("raw_sightings_buffer")
                 .map_err(|e| StorageError::Clickhouse(e.to_string()))?;
             for row in &batch.rows {
                 insert
@@ -146,7 +151,7 @@ impl Stores {
         }
         let mut insert = self
             .clickhouse
-            .insert("canonical_event_revisions")
+            .insert("canonical_event_revisions_buffer")
             .map_err(|e| StorageError::Clickhouse(e.to_string()))?;
         for ev in events {
             let (kind, mint, market, trader, quote_mint, base, quote) = flatten(ev);
@@ -207,7 +212,7 @@ impl Stores {
         let computed_at = Utc::now();
         let mut insert = self
             .clickhouse
-            .insert("market_snapshots")
+            .insert("market_snapshots_buffer")
             .map_err(|e| StorageError::Clickhouse(e.to_string()))?;
         for snapshot in snapshots {
             let mut snapshot_json = serde_json::to_value(snapshot).unwrap_or_default();
@@ -955,8 +960,28 @@ impl Stores {
         )
         .execute(&self.postgres)
         .await?;
+        // Co-buy pairs are computed from a self-join of graph_facts per mint, which is
+        // O(buyers^2) per mint. Sniper/bot-farmed mints can have tens of thousands of
+        // repeat BOUGHT events from a couple thousand wallets, which blew this join up
+        // to hundreds of millions of intermediate rows and stalled Postgres for 20+
+        // minutes at a time. Dedupe to one (wallet, mint) row and cap to the earliest
+        // 200 distinct wallets per mint (the coordinated-early-buying signal this edge
+        // is meant to capture) so the join stays bounded regardless of bot volume.
         sqlx::query(
-            r#"INSERT INTO pumphound.derived_edges
+            r#"WITH per_wallet AS (
+              SELECT source_node, asset_mint, MIN(slot) AS slot,
+                     (array_agg(event_id ORDER BY slot ASC))[1] AS event_id
+              FROM pumphound.graph_facts
+              WHERE edge_type='BOUGHT' AND asset_mint IS NOT NULL
+              GROUP BY source_node, asset_mint
+            ), capped AS (
+              SELECT source_node, asset_mint, slot, event_id,
+                     ROW_NUMBER() OVER (PARTITION BY asset_mint ORDER BY slot ASC) AS rn
+              FROM per_wallet
+            ), bounded AS (
+              SELECT source_node, asset_mint, slot, event_id FROM capped WHERE rn <= 200
+            )
+            INSERT INTO pumphound.derived_edges
             (edge_id, source_node, target_node, edge_type, score, evidence_count,
              first_observed_slot, last_observed_slot, algorithm_version, supporting_signatures)
             SELECT md5(a.source_node || b.source_node || 'CO_BOUGHT_WITH'),
@@ -966,10 +991,9 @@ impl Stores {
                    MIN(LEAST(a.slot, b.slot)), MAX(GREATEST(a.slot, b.slot)),
                    'co-buy-v1',
                    jsonb_agg(DISTINCT a.event_id)
-            FROM pumphound.graph_facts a
-            JOIN pumphound.graph_facts b
+            FROM bounded a
+            JOIN bounded b
               ON a.asset_mint = b.asset_mint
-             AND a.edge_type='BOUGHT' AND b.edge_type='BOUGHT'
              AND a.source_node < b.source_node
             GROUP BY a.source_node, b.source_node
             HAVING COUNT(DISTINCT a.asset_mint) >= 2

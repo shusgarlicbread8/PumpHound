@@ -29,7 +29,7 @@ type UiState = {
 };
 
 export const useUi = create<UiState>((set) => ({
-  navExpanded: false,
+  navExpanded: true,
   selectedLaunchId: null,
   selectedMint: null,
   commandOpen: false,

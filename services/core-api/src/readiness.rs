@@ -295,13 +295,16 @@ async fn quarantine_impact(state: &AppState) -> QuarantineImpact {
         .stores
         .clickhouse
         .query(
+            // Reads go through the _buffer view (see db/clickhouse/002_insert_buffering.sql)
+            // rather than the underlying table: this query wants the last 15 minutes, and
+            // rows can sit in the buffer for up to 5s before landing in the base table.
             r#"WITH canonical AS (
               SELECT event_id,
                 argMax(kind,revision) AS canonical_kind,
                 argMax(action,revision) AS canonical_action,
                 argMax(payload_json,revision) AS canonical_payload
-              FROM canonical_event_revisions
-              WHERE canonical_event_revisions.known_at>=now()-INTERVAL 15 MINUTE
+              FROM canonical_event_revisions_buffer
+              WHERE canonical_event_revisions_buffer.known_at>=now()-INTERVAL 15 MINUTE
               GROUP BY event_id
               HAVING canonical_action='UPSERT'
             )
@@ -415,7 +418,7 @@ pub async fn quarantine_health(state: &AppState) -> Value {
           countIf(CAST(t.1 AS Int8) NOT IN (1,2)) AS invalid_action_rows
         FROM (
           SELECT event_id,argMax(tuple(action,kind,known_at),revision) AS t
-          FROM canonical_event_revisions GROUP BY event_id
+          FROM canonical_event_revisions_buffer GROUP BY event_id
         )"#,
         )
         .fetch_one::<QuarantineCounts>()
@@ -438,7 +441,7 @@ pub async fn quarantine_health(state: &AppState) -> Value {
           formatDateTime(max(t.6),'%FT%T.%fZ') AS last_seen
         FROM (
           SELECT event_id,argMax(tuple(action,kind,program_id,payload_json,decoder_version,known_at),revision) AS t
-          FROM canonical_event_revisions GROUP BY event_id
+          FROM canonical_event_revisions_buffer GROUP BY event_id
         ) WHERE CAST(t.1 AS Int8)=1 AND t.2='decode.quarantined'
           AND t.6>=now()-INTERVAL 15 MINUTE
         GROUP BY program_id,reason,discriminator,decoder_version

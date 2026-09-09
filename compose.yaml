@@ -25,6 +25,7 @@ services:
       - ./db/postgres/012_canonical_event_revisions.sql:/docker-entrypoint-initdb.d/012_canonical_event_revisions.sql:ro
       - ./db/postgres/013_model_registry_integrity.sql:/docker-entrypoint-initdb.d/013_model_registry_integrity.sql:ro
       - ./db/postgres/014_position_quarantine_propagation.sql:/docker-entrypoint-initdb.d/014_position_quarantine_propagation.sql:ro
+      - ./db/postgres/015_intelligence_refresh_indexes.sql:/docker-entrypoint-initdb.d/015_intelligence_refresh_indexes.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U pumphound -d pumphound"]
       interval: 3s
@@ -45,6 +46,7 @@ services:
     volumes:
       - pumphound-ch:/var/lib/clickhouse
       - ./db/clickhouse/001_events.sql:/docker-entrypoint-initdb.d/001_events.sql:ro
+      - ./db/clickhouse/002_insert_buffering.sql:/docker-entrypoint-initdb.d/002_insert_buffering.sql:ro
     ulimits:
       nofile:
         soft: 262144

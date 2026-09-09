@@ -229,8 +229,17 @@ async fn system_status(State(s): State<Arc<AppState>>) -> Json<Value> {
         "last_event_at": last_event_at,
         "stores": {
             "postgres": if sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(&s.stores.postgres).await.is_ok() { "up" } else { "down" },
-            "clickhouse": "configured",
-            "nats": "configured"
+            // Was hardcoded to "configured" regardless of actual reachability, so a
+            // wedged or unresponsive store (observed: ClickHouse pinned at 300-500%
+            // CPU and refusing new connections for minutes at a time under merge
+            // pressure) never showed up here even though it was silently degrading
+            // every page that touched it. Both are now real liveness probes.
+            "clickhouse": if s.stores.clickhouse.query("SELECT 1").fetch_one::<u8>().await.is_ok() { "up" } else { "down" },
+            "nats": match s.stores.nats.connection_state() {
+                async_nats::connection::State::Connected => "up",
+                async_nats::connection::State::Pending => "connecting",
+                async_nats::connection::State::Disconnected => "down",
+            }
         },
         "readiness": readiness,
         "quarantine_context": quarantine_context,

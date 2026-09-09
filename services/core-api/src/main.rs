@@ -71,10 +71,19 @@ fn consume_normalized(state: Arc<AppState>) {
                                 let mut snapshots = Vec::new();
                                 for ev in events {
                                     snapshots.extend(state.apply_event(&ev).await);
+                                    // Sequence is assigned once here, at broadcast time, so every
+                                    // subscriber sees the same number for the same event. Assigning
+                                    // it per-connection (as stream.rs used to) meant two clients
+                                    // watching at once — e.g. the desktop app plus a browser tab —
+                                    // each stole sequence slots the other never saw, so every client
+                                    // perceived a permanent gap and force-resynced on nearly every
+                                    // message.
+                                    let seq = state.next_seq().await;
                                     let _ = state.radar_tx.send(serde_json::json!({
                                         "topic": "radar",
                                         "event_id": ev.event_id,
                                         "kind": format!("{:?}", ev.payload).split('(').next(),
+                                        "seq": seq,
                                     }));
                                 }
                                 if !snapshots.is_empty() {
