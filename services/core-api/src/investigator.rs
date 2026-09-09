@@ -8,8 +8,15 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use uuid::Uuid;
 
-const HTTP_TIMEOUT_SECS: u64 = 20;
-const REMOTE_TIMEOUT_SECS: f64 = 15.0;
+// Measured: a real "committee" completion against SiliconFlow (deepseek-ai/DeepSeek-V4-Flash)
+// takes ~19-20s end to end. The old budget (15s requested, 20s hard client timeout) had almost
+// no margin — httpx's `timeout=` on the investigator side bounds each phase (connect/write/read)
+// independently, not the total call, so a request that legitimately needed the full 15s to
+// generate a response could still blow past a 20s wall-clock cutoff once network/serialization
+// overhead is added. That made every committee call a coin flip, which is why so many decisions
+// fell back to "research_investigator_unavailable" instead of using the actual grounded analysis.
+const HTTP_TIMEOUT_SECS: u64 = 35;
+const REMOTE_TIMEOUT_SECS: f64 = 25.0;
 const MAX_GRAPH_FACTS: i64 = 100;
 const MAX_FUNDING_EDGES: i64 = 25;
 const MAX_COHORTS: i64 = 20;

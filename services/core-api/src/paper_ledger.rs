@@ -1752,11 +1752,16 @@ pub async fn portfolio_view(stores: &Stores, portfolio_id: Uuid) -> anyhow::Resu
     .bind(run_id)
     .fetch_all(&stores.postgres)
     .await?;
+    // CLOSED positions legitimately zero out base_atomic/cost_quote_atomic once every lot is
+    // sold (that's the remaining basis, not the historical entry), so an unfiltered list here
+    // reads as a wall of empty "positions" once a book has any trading history. This desk is
+    // for deciding what to do with current holdings, so only show what's actually open.
     let positions = sqlx::query(
         r#"SELECT position_id::text,launch_id::text,market,base_mint,quote_mint,
                   base_atomic::text,cost_quote_atomic::text,realized_pnl_quote_atomic::text,status
            FROM pumphound.paper_positions
-           WHERE portfolio_id=$1 AND simulation_run_id=$2 ORDER BY opened_at"#,
+           WHERE portfolio_id=$1 AND simulation_run_id=$2 AND status IN ('OPEN','UNMARKABLE')
+           ORDER BY opened_at"#,
     )
     .bind(portfolio_id)
     .bind(run_id)

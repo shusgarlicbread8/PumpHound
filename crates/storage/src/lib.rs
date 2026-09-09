@@ -393,6 +393,21 @@ impl Stores {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
+            // Falling back to the executing trader as a provisional creator is a reasonable
+            // guess when this trade arrived before we ever saw the launch's create event. It
+            // stops being reasonable when the trader identity is itself unresolved (PumpSwap
+            // logs-only decode without the full transaction leaves `trader` as the zeroed
+            // Pubkey, which base58-encodes to the System Program address) — that produced
+            // launches whose "creator" was really just "11111111111111111111111111111111111111112",
+            // a real-looking address for a wallet that never touched this token. The UI already
+            // renders an empty creator as Unknown, so fall through to that instead of fabricating one.
+            const UNRESOLVED_PUBKEY: &str = "11111111111111111111111111111111111111112";
+            let trader_str = t.trader.to_string();
+            let creator = if creator.is_empty() && trader_str != UNRESOLVED_PUBKEY {
+                trader_str
+            } else {
+                creator
+            };
             let launch_id = Uuid::now_v7();
             sqlx::query(
                 r#"INSERT INTO pumphound.launches
@@ -408,7 +423,7 @@ impl Stores {
                 pumphound_domain::Protocol::PumpSwap => "pump_swap",
             })
             .bind(ev.program_id.to_string())
-            .bind(if creator.is_empty() { t.trader.to_string() } else { creator })
+            .bind(&creator)
             .bind(&ev.event_id)
             .bind(&ev.signature)
             .bind(slot)
