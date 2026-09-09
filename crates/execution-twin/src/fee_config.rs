@@ -60,6 +60,7 @@ struct FeeConfigDecoded {
 
 #[derive(Debug, Deserialize)]
 struct PumpGlobalDecoded {
+    fee_recipient: String,
     initial_virtual_token_reserves: u128,
     initial_virtual_sol_reserves: u128,
     initial_real_token_reserves: u128,
@@ -70,6 +71,7 @@ struct PumpGlobalDecoded {
 
 #[derive(Debug, Deserialize)]
 struct AmmGlobalDecoded {
+    protocol_fee_recipients: Vec<String>,
     lp_fee_basis_points: u64,
     protocol_fee_basis_points: u64,
     coin_creator_fee_basis_points: u64,
@@ -98,6 +100,10 @@ pub struct FeeSchedules {
     pub amm_global_lp_fee_bps: u64,
     pub amm_global_protocol_fee_bps: u64,
     pub amm_global_creator_fee_bps: u64,
+    /// `Global.fee_recipient` — the account the Pump `buy`/`sell` instructions must be given.
+    pub pump_fee_recipient: String,
+    /// `GlobalConfig.protocol_fee_recipients` — any one is valid for PumpSwap instructions.
+    pub amm_protocol_fee_recipients: Vec<String>,
 }
 
 fn convert(t: &FeeTierDecoded) -> FeeTier {
@@ -148,6 +154,8 @@ fn load() -> FeeSchedules {
         amm_global_lp_fee_bps: amm_global.lp_fee_basis_points,
         amm_global_protocol_fee_bps: amm_global.protocol_fee_basis_points,
         amm_global_creator_fee_bps: amm_global.coin_creator_fee_basis_points,
+        pump_fee_recipient: global.fee_recipient.clone(),
+        amm_protocol_fee_recipients: amm_global.protocol_fee_recipients.clone(),
     }
 }
 
