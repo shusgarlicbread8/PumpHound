@@ -99,6 +99,13 @@ impl MarketReducer for InMemoryMarketReducer {
                             "real_base_atomic",
                         ])
                     },
+                    is_mayhem_mode: c
+                        .protocol_flags
+                        .get("is_mayhem_mode")
+                        .and_then(|v| v.as_bool()),
+                    creator_fee_applies: c.creator.map(|k| k.0 != [0u8; 32]),
+                    base_supply_atomic: None,
+                    cashback_fee_bps: None,
                 };
                 self.mint_to_market
                     .insert(c.mint.to_string(), c.market.to_string());
@@ -149,6 +156,10 @@ impl MarketReducer for InMemoryMarketReducer {
                         migrated_market: None,
                         config_snapshot_id: "observed_from_trade".into(),
                         quality: trade_quality(t, event, event.tx_index.is_some()),
+                        is_mayhem_mode: t.is_mayhem_mode,
+                        creator_fee_applies: t.creator_fee_applies,
+                        base_supply_atomic: t.base_supply_atomic,
+                        cashback_fee_bps: t.cashback_fee_bps,
                     };
                     self.mint_to_market.insert(t.mint.to_string(), mk.clone());
                     self.by_market.insert(
@@ -184,6 +195,18 @@ impl MarketReducer for InMemoryMarketReducer {
                     m.snapshot.real_quote_atomic = v;
                 }
                 m.snapshot.quality = trade_quality(t, event, event.tx_index.is_some());
+                if t.is_mayhem_mode.is_some() {
+                    m.snapshot.is_mayhem_mode = t.is_mayhem_mode;
+                }
+                if t.creator_fee_applies.is_some() {
+                    m.snapshot.creator_fee_applies = t.creator_fee_applies;
+                }
+                if t.base_supply_atomic.is_some() {
+                    m.snapshot.base_supply_atomic = t.base_supply_atomic;
+                }
+                if t.cashback_fee_bps.is_some() {
+                    m.snapshot.cashback_fee_bps = t.cashback_fee_bps;
+                }
                 m.snapshot.effective_base_atomic = match m.snapshot.protocol {
                     Protocol::PumpSwap => m.snapshot.real_base_atomic,
                     Protocol::PumpCurve => m.snapshot.virtual_base_atomic,

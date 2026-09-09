@@ -132,6 +132,60 @@ fn collect_logs(logs: &[String]) -> Vec<([u8; 8], Vec<u8>)> {
     out
 }
 
+/// Best-effort parse of the additive BuyEvent/SellEvent suffix (pump_amm IDL @9c82f61):
+/// Buy: track_volume, total_unclaimed, total_claimed, current_sol_volume, last_update,
+///      min_base_amount_out, ix_name, cashback_bps, cashback, buyback_bps, buyback_fee,
+///      virtual_quote_reserves(i128), can_boost, base_supply.
+/// Sell: cashback_bps, cashback, buyback_bps, buyback_fee, virtual_quote_reserves(i128),
+///       can_boost, base_supply.
+/// Older layouts stop early; every field stays `None` rather than being invented.
+#[derive(Debug, Default)]
+struct TradeSuffix {
+    ix_name: Option<String>,
+    cashback_bps: Option<u64>,
+    virtual_quote_reserves: Option<i128>,
+    can_boost: Option<bool>,
+    base_supply: Option<u64>,
+    layout: &'static str,
+}
+
+fn parse_trade_suffix(c: &mut BorshCursor<'_>, is_buy: bool) -> TradeSuffix {
+    let mut out = TradeSuffix {
+        layout: "legacy_no_suffix",
+        ..Default::default()
+    };
+    if c.remaining() == 0 {
+        return out;
+    }
+    let attempt = (|| -> Result<TradeSuffix, DecodeError> {
+        let mut s = TradeSuffix::default();
+        if is_buy {
+            let _track = c.bool()?;
+            let _ = c.u64()?;
+            let _ = c.u64()?;
+            let _ = c.u64()?;
+            let _ = c.i64()?;
+            let _min_base_out = c.u64()?;
+            s.ix_name = Some(c.string()?);
+        }
+        s.cashback_bps = Some(c.u64()?);
+        let _cashback = c.u64()?;
+        let _buyback_bps = c.u64()?;
+        let _buyback = c.u64()?;
+        s.virtual_quote_reserves = Some(c.i128()?);
+        s.can_boost = Some(c.bool()?);
+        s.base_supply = Some(c.u64()?);
+        s.layout = "boost_v1";
+        Ok(s)
+    })();
+    if let Ok(parsed) = attempt {
+        out = parsed;
+    } else {
+        out.layout = "unrecognized_suffix";
+    }
+    out
+}
+
 fn decode_one(
     tx: &RawTransaction,
     disc: [u8; 8],
@@ -214,9 +268,9 @@ fn decode_one(
             let pool_base = c.atomic_u64()?;
             let pool_quote = c.atomic_u64()?;
             let quote_amt = c.atomic_u64()?;
-            let _lp_bps = c.u64()?;
+            let lp_bps = c.u64()?;
             let lp_fee = c.atomic_u64()?;
-            let _proto_bps = c.u64()?;
+            let proto_bps = c.u64()?;
             let proto_fee = c.atomic_u64()?;
             let _ = c.u64()?;
             let user_quote = c.atomic_u64()?;
@@ -226,17 +280,53 @@ fn decode_one(
             let _ = c.pubkey()?;
             let _ = c.pubkey()?;
             let _ = c.pubkey()?;
-            let _coin_creator = c.pubkey()?;
-            let _ = c.u64()?;
+            let coin_creator = c.pubkey()?;
+            let creator_bps = c.u64()?;
             let creator_fee = c.atomic_u64()?;
-            // New PumpSwap releases append cashback, buyback and boost fields.
-            // They are intentionally not consumed: all financially relevant
-            // common fields above are stable, and ignoring an additive suffix
-            // keeps old and new event layouts compatible.
+            // Newer PumpSwap releases append cashback, buyback and boost fields. The suffix is
+            // parsed best-effort so old archives still decode; when present it yields the boost
+            // pool's virtual quote reserves and the post-burn base supply, both required for
+            // exact quoting (effective reserve = real + virtual; fee tier keyed by market cap).
+            let boost = parse_trade_suffix(&mut c, is_buy);
+            // `quote_amount_atomic` is what the trader paid (buy) or received (sell):
+            //   buy:                quote_amount_in = swap quote, user_quote_amount_in = total incl. fees
+            //   buy_exact_quote_in: quote_amount_in = total incl. fees, user_quote_amount_in = swap quote
+            //   sell:               quote_amount_out = gross, user_quote_amount_out = net of fees
+            // (verified against mainnet BuyEvent/SellEvent fixtures in execution-twin golden tests).
             let quote = if user_quote.is_zero() {
                 quote_amt
+            } else if is_buy {
+                Atomic(quote_amt.0.max(user_quote.0))
             } else {
                 user_quote
+            };
+            let swap_quote = if is_buy && !user_quote.is_zero() {
+                Atomic(quote_amt.0.min(user_quote.0))
+            } else {
+                quote_amt
+            };
+            // Event reserves are PRE-trade. Derive the post-trade pool state the reducer needs:
+            // buys add swap_quote + lp_fee to the pool and remove base_out; sells add base_in and
+            // remove (quote_out - lp_fee). Protocol/creator fees leave for their recipients.
+            let (pool_base_post, pool_quote_post) = if is_buy {
+                (
+                    Atomic(pool_base.0.saturating_sub(base_amt.0)),
+                    Atomic(
+                        pool_quote
+                            .0
+                            .saturating_add(swap_quote.0)
+                            .saturating_add(lp_fee.0),
+                    ),
+                )
+            } else {
+                (
+                    Atomic(pool_base.0.saturating_add(base_amt.0)),
+                    Atomic(
+                        pool_quote
+                            .0
+                            .saturating_sub(quote_amt.0.saturating_sub(lp_fee.0)),
+                    ),
+                )
             };
             let Some(identity) = pool_identity_from_transaction(tx, pool, user) else {
                 return Err(DecodeError::IncompatibleLayout(format!(
@@ -244,7 +334,8 @@ fn decode_one(
                 )));
             };
             let (token_amount, quote_amount) = identity.orient(base_amt, quote);
-            let (token_reserve, quote_reserve) = identity.orient(pool_base, pool_quote);
+            let (token_reserve, quote_reserve) = identity.orient(pool_base_post, pool_quote_post);
+            let (pre_token_reserve, pre_quote_reserve) = identity.orient(pool_base, pool_quote);
             let normalized_side = if identity.reversed {
                 if is_buy {
                     TradeSide::Sell
@@ -292,9 +383,18 @@ fn decode_one(
                         ),
                     ],
                     reserve_snapshot_id: None,
-                    instruction_name: if is_buy { "buy".into() } else { "sell".into() },
+                    instruction_name: boost.ix_name.clone().unwrap_or_else(|| {
+                        if is_buy {
+                            "buy".into()
+                        } else {
+                            "sell".into()
+                        }
+                    }),
                     virtual_base_atomic: Some(Atomic(0)),
-                    virtual_quote_atomic: Some(Atomic(0)),
+                    // Boost pools: effective quote = real + virtual. Legacy layouts: 0 (known).
+                    virtual_quote_atomic: Some(Atomic(
+                        boost.virtual_quote_reserves.filter(|v| *v > 0).unwrap_or(0) as u128,
+                    )),
                     real_base_atomic: Some(token_reserve),
                     real_quote_atomic: Some(quote_reserve),
                     raw_event: json!({
@@ -305,7 +405,26 @@ fn decode_one(
                         "quote_decimals": identity.quote_decimals,
                         "orientation_normalized": identity.reversed,
                         "executable_quote_supported": true,
+                        "reserve_semantics": "post_trade_derived_from_pre_trade_event",
+                        "pre_trade_base_reserve": pre_token_reserve.to_string(),
+                        "pre_trade_quote_reserve": pre_quote_reserve.to_string(),
+                        "pool_quote_amount": quote_amt.to_string(),
+                        "coin_creator": coin_creator.to_string(),
+                        "lp_fee_basis_points": lp_bps,
+                        "protocol_fee_basis_points": proto_bps,
+                        "coin_creator_fee_basis_points": creator_bps,
+                        "virtual_quote_reserves": boost.virtual_quote_reserves,
+                        "base_supply": boost.base_supply,
+                        "can_boost": boost.can_boost,
+                        "suffix_layout": boost.layout,
                     }),
+                    protocol_fee_bps: Some(proto_bps),
+                    creator_fee_bps: Some(creator_bps),
+                    lp_fee_bps: Some(lp_bps),
+                    is_mayhem_mode: None,
+                    creator_fee_applies: Some(coin_creator.0 != [0u8; 32]),
+                    base_supply_atomic: boost.base_supply.map(|v| Atomic(v as u128)),
+                    cashback_fee_bps: boost.cashback_bps,
                 }),
             )))
         }
@@ -657,8 +776,22 @@ mod tests {
         assert_eq!(trade.side, TradeSide::Buy);
         assert_eq!(trade.base_amount_atomic, Atomic(76_897_390));
         assert_eq!(trade.quote_amount_atomic, Atomic(10_000));
-        assert_eq!(trade.real_base_atomic, Some(Atomic(809_878_642_946_578)));
-        assert_eq!(trade.real_quote_atomic, Some(Atomic(105_003_422_795)));
+        // Event reserves are pre-trade; the canonical event carries the derived post-trade
+        // state: pool base (WSOL here, reversed) += base_in; pool quote -= (quote_out - lp_fee).
+        assert_eq!(
+            trade.real_base_atomic,
+            Some(Atomic(809_878_642_946_578 - (76_897_390 - 192_822)))
+        );
+        assert_eq!(
+            trade.real_quote_atomic,
+            Some(Atomic(105_003_422_795 + 10_000))
+        );
+        assert_eq!(trade.raw_event["pre_trade_base_reserve"], "809878642946578");
+        assert_eq!(trade.base_supply_atomic, Some(Atomic(1_000_000)));
+        assert_eq!(trade.lp_fee_bps, Some(25));
+        assert_eq!(trade.protocol_fee_bps, Some(5));
+        assert_eq!(trade.creator_fee_applies, Some(true)); // coin_creator = key(14) != default
+        assert_eq!(trade.raw_event["suffix_layout"], "boost_v1");
         assert_eq!(trade.fee_components[0].asset.mint, token);
     }
 

@@ -9,6 +9,7 @@ members = [
     "crates/market-state",
     "crates/feature-core",
     "crates/paper-core",
+    "crates/execution-twin",
     "crates/api-contract",
     "services/collector",
     "services/core-api",
@@ -30,6 +31,7 @@ base64 = "0.22"
 bs58 = "0.5"
 bytes = "1.10"
 chrono = { version = "0.4", features = ["serde"] }
+curve25519-dalek = { version = "4.1", default-features = false, features = ["alloc"] }
 clickhouse = { version = "0.13", features = ["time", "uuid", "chrono"] }
 futures = "0.3"
 hex = "0.4"
@@ -63,4 +65,5 @@ pumphound-storage = { path = "crates/storage" }
 pumphound-market-state = { path = "crates/market-state" }
 pumphound-feature-core = { path = "crates/feature-core" }
 pumphound-paper-core = { path = "crates/paper-core" }
+pumphound-execution-twin = { path = "crates/execution-twin" }
 pumphound-api-contract = { path = "crates/api-contract" }

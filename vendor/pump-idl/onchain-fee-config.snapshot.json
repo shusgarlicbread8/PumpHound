@@ -1,0 +1,551 @@
+{
+ "source": "solana-mainnet getAccountInfo (finalized) via Helius RPC",
+ "retrieved_at": "2026-09-09T13:18:36.413407+00:00",
+ "idl_commit": "9c82f61cb711b044a17f770ab8ce9f9bdf78f333",
+ "accounts": {
+  "PUMP_FEE_CONFIG": {
+   "address": "8Wf5TiAheLUqBrKXeYg2JtAFFMWtKdG2BSFgqUcPVwTt",
+   "owner": "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ",
+   "slot": 445620372,
+   "data_sha256": "d2864545485600cc11e919ab37c669ca2a31bf6de783ea4e5a0187eb7a203823",
+   "data_len": 4073,
+   "account_type": "FeeConfig",
+   "decoded": {
+    "bump": 253,
+    "admin": "FFWtrEQ4B4PKQoVuHYzZq8FabGkVatYzDpEVHsK5rrhF",
+    "flat_fees": {
+     "lp_fee_bps": 0,
+     "protocol_fee_bps": 95,
+     "creator_fee_bps": 30
+    },
+    "fee_tiers": [
+     {
+      "market_cap_lamports_threshold": 0,
+      "fees": {
+       "lp_fee_bps": 0,
+       "protocol_fee_bps": 95,
+       "creator_fee_bps": 30
+      }
+     }
+    ],
+    "stable_fee_tiers": [
+     {
+      "market_cap_lamports_threshold": 0,
+      "fees": {
+       "lp_fee_bps": 0,
+       "protocol_fee_bps": 95,
+       "creator_fee_bps": 30
+      }
+     }
+    ]
+   },
+   "consumed_bytes": 153
+  },
+  "AMM_FEE_CONFIG": {
+   "address": "5PHirr8joyTMp9JMm6nW7hNDVyEYdkzDqazxPD7RaTjx",
+   "owner": "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ",
+   "slot": 445620373,
+   "data_sha256": "e1c4647573d8caacc33b267781272c4fa0ad30a70900dddbaab512db670d3af2",
+   "data_len": 4073,
+   "account_type": "FeeConfig",
+   "decoded": {
+    "bump": 255,
+    "admin": "FFWtrEQ4B4PKQoVuHYzZq8FabGkVatYzDpEVHsK5rrhF",
+    "flat_fees": {
+     "lp_fee_bps": 25,
+     "protocol_fee_bps": 5,
+     "creator_fee_bps": 0
+    },
+    "fee_tiers": [
+     {
+      "market_cap_lamports_threshold": 0,
+      "fees": {
+       "lp_fee_bps": 2,
+       "protocol_fee_bps": 93,
+       "creator_fee_bps": 30
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 420000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 95
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 1470000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 90
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 2460000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 85
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 3440000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 80
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 4420000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 75
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 9820000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 70
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 14740000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 65
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 19650000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 60
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 24560000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 55
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 29470000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 50
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 34380000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 45
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 39300000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 40
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 44210000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 35
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 49120000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 30
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 54030000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 28
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 58940000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 25
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 63860000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 23
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 68770000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 20
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 73681000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 18
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 78590000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 15
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 83500000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 13
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 88400000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 10
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 93330000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 8
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 98240000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 5
+      }
+     }
+    ],
+    "stable_fee_tiers": [
+     {
+      "market_cap_lamports_threshold": 0,
+      "fees": {
+       "lp_fee_bps": 2,
+       "protocol_fee_bps": 93,
+       "creator_fee_bps": 30
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 59000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 95
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 300000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 90
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 500000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 85
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 700000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 80
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 900000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 75
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 2000000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 70
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 3000000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 65
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 4000000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 60
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 5000000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 55
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 6000000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 50
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 7000000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 45
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 8000000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 40
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 9000000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 35
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 10000000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 30
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 11000000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 28
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 12000000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 25
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 13000000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 23
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 14000000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 20
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 15000000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 18
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 16000000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 15
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 17000000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 13
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 18000000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 10
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 19000000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 8
+      }
+     },
+     {
+      "market_cap_lamports_threshold": 20000000000000,
+      "fees": {
+       "lp_fee_bps": 20,
+       "protocol_fee_bps": 5,
+       "creator_fee_bps": 5
+      }
+     }
+    ]
+   },
+   "consumed_bytes": 2073
+  },
+  "PUMP_GLOBAL": {
+   "address": "4wTV1YmiEkRvAtNtsSGPtUrqRYQMe5SKy2uB4Jjaxnjf",
+   "owner": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+   "slot": 445620373,
+   "data_sha256": "9aa57beb2b897cc175a536f170ddb25c0c8bed8ed6620c7087d8a7fb834f7d30",
+   "data_len": 1045,
+   "account_type": "Global",
+   "decoded": {
+    "fee_recipient": "62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV",
+    "initial_virtual_token_reserves": 1073000000000000,
+    "initial_virtual_sol_reserves": 30000000000,
+    "initial_real_token_reserves": 793100000000000,
+    "token_total_supply": 1000000000000000,
+    "fee_basis_points": 95,
+    "creator_fee_basis_points": 5,
+    "fee_recipients": [
+     "7VtfL8fvgNfhz17qKRMjzQEXgbdpnHHHQRh54R9jP2RJ",
+     "7hTckgnGnLQR6sdH7YkqFTAA7VwTfYFaZ6EhEsU3saCX",
+     "9rPYyANsfQZw3DnDmKE3YCQF5E8oD89UXoHn9JFEhJUz",
+     "AVmoTthdrX6tKt4nDjco2D775W2YK3sDhxPcMmzUAmTY",
+     "CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM",
+     "FWsW1xNtWscwNmKv6wVsU1iTzRN6wmmk3MjxRP5tT7hz",
+     "G5UZAVbAf46s7cKWoyKu8kYTip9DGTpbLZ2qa9Aq69dP"
+    ],
+    "create_v2_enabled": true,
+    "mayhem_mode_enabled": true,
+    "initial_virtual_quote_reserves": 4292000000,
+    "_other_fields": [
+     "initialized",
+     "authority",
+     "withdraw_authority",
+     "enable_migrate",
+     "pool_migration_fee",
+     "set_creator_authority",
+     "admin_set_creator_authority",
+     "whitelist_pda",
+     "reserved_fee_recipient",
+     "reserved_fee_recipients",
+     "is_cashback_enabled",
+     "buyback_fee_recipients",
+     "buyback_basis_points",
+     "whitelisted_quote_mints"
+    ]
+   },
+   "consumed_bytes": 1045
+  },
+  "AMM_GLOBAL_CONFIG": {
+   "address": "ADyA8hdefvWN2dbGGWFotbzWxrAvLW83WG6QCVXvJKqw",
+   "owner": "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+   "slot": 445620373,
+   "data_sha256": "413b175d83f4990a5cf38795d5bd9bddd5ce3c19c273cf721afae13147b5b496",
+   "data_len": 940,
+   "account_type": "GlobalConfig",
+   "decoded": {
+    "lp_fee_basis_points": 20,
+    "protocol_fee_basis_points": 5,
+    "disable_flags": 0,
+    "protocol_fee_recipients": [
+     "62qc2CNXwrYqQScmEdiZFFAnJR262PxWEuNQtxfafNgV",
+     "7VtfL8fvgNfhz17qKRMjzQEXgbdpnHHHQRh54R9jP2RJ",
+     "7hTckgnGnLQR6sdH7YkqFTAA7VwTfYFaZ6EhEsU3saCX",
+     "9rPYyANsfQZw3DnDmKE3YCQF5E8oD89UXoHn9JFEhJUz",
+     "AVmoTthdrX6tKt4nDjco2D775W2YK3sDhxPcMmzUAmTY",
+     "FWsW1xNtWscwNmKv6wVsU1iTzRN6wmmk3MjxRP5tT7hz",
+     "G5UZAVbAf46s7cKWoyKu8kYTip9DGTpbLZ2qa9Aq69dP",
+     "JCRGumoE9Qi5BBgULTgdgTLjSgkCMSbF62ZZfGs84JeU"
+    ],
+    "coin_creator_fee_basis_points": 5,
+    "mayhem_mode_enabled": true,
+    "_other_fields": [
+     "admin",
+     "admin_set_coin_creator_authority",
+     "whitelist_pda",
+     "reserved_fee_recipient",
+     "reserved_fee_recipients",
+     "is_cashback_enabled",
+     "buyback_fee_recipients",
+     "buyback_basis_points",
+     "boost_authority",
+     "boost_enabled"
+    ]
+   },
+   "consumed_bytes": 940
+  }
+ }
+}

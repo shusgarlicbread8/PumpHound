@@ -98,6 +98,28 @@ pub struct TradeExecuted {
     pub real_base_atomic: Option<Atomic>,
     pub real_quote_atomic: Option<Atomic>,
     pub raw_event: serde_json::Value,
+    /// Exact fee schedule the program applied to this trade (from the on-chain event).
+    /// `None` on legacy layouts that did not carry fee fields. Never defaulted to zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol_fee_bps: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creator_fee_bps: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lp_fee_bps: Option<u64>,
+    /// Pump mayhem-mode coins use different curve parameters and report zero protocol fees;
+    /// the execution twin refuses to quote them rather than fabricate constant-product math.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_mayhem_mode: Option<bool>,
+    /// `creator != Pubkey::default()` — creator fee applies only when true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creator_fee_applies: Option<bool>,
+    /// PumpSwap `base_supply` (post-burn) used for market-cap fee tiering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_supply_atomic: Option<Atomic>,
+    /// Cashback-enabled coins replace the creator fee with a cashback fee of this size
+    /// (observed on-chain: creator_fee_basis_points=0, cashback_fee_basis_points=30).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cashback_fee_bps: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

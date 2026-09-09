@@ -20,6 +20,15 @@ pub struct MarketSnapshot {
     pub migrated_market: Option<Pubkey>,
     pub config_snapshot_id: String,
     pub quality: DataQuality,
+    /// Protocol flags needed for exact quoting. `None` = unknown (not false).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_mayhem_mode: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creator_fee_applies: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_supply_atomic: Option<Atomic>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cashback_fee_bps: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

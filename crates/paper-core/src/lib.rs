@@ -118,6 +118,10 @@ fn placeholder_state(q: &PaperQuote) -> MarketSnapshot {
         migrated_market: None,
         config_snapshot_id: "default".into(),
         quality: q.quality.clone(),
+        is_mayhem_mode: None,
+        creator_fee_applies: None,
+        base_supply_atomic: None,
+        cashback_fee_bps: None,
     }
 }
 

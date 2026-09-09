@@ -1,0 +1,19 @@
+[package]
+name = "pumphound-execution-twin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Paper-only Solana execution twin: exact Pump/PumpSwap intents, fee decomposition, landing/failure model. No signer, no submission."
+
+[dependencies]
+pumphound-domain.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+sha2.workspace = true
+bs58.workspace = true
+thiserror.workspace = true
+curve25519-dalek.workspace = true
+
+[dev-dependencies]

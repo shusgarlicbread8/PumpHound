@@ -410,6 +410,7 @@ dependencies = [
  "fiat-crypto",
  "rustc_version",
  "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -1530,6 +1531,21 @@ dependencies = [
  "bs58",
  "chrono",
  "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.20",
+ "uuid",
+]
+
+[[package]]
+name = "pumphound-execution-twin"
+version = "0.1.0"
+dependencies = [
+ "bs58",
+ "chrono",
+ "curve25519-dalek",
+ "pumphound-domain",
  "serde",
  "serde_json",
  "sha2",

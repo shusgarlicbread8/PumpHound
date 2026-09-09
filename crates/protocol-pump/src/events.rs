@@ -367,6 +367,13 @@ fn decode_trade(
                         "instruction_accounts"
                     },
                 }),
+                protocol_fee_bps: None,
+                creator_fee_bps: None,
+                lp_fee_bps: None,
+                is_mayhem_mode: None,
+                creator_fee_applies: None,
+                base_supply_atomic: None,
+                cashback_fee_bps: None,
             }),
         ));
     }
@@ -374,10 +381,10 @@ fn decode_trade(
     let r_sol = c.atomic_u64()?;
     let r_tok = c.atomic_u64()?;
     let _fee_recipient = c.pubkey()?;
-    let _fee_bps = c.u64()?;
+    let fee_bps = c.u64()?;
     let fee = c.atomic_u64()?;
     let creator = c.pubkey()?;
-    let _creator_fee_bps = c.u64()?;
+    let creator_fee_bps = c.u64()?;
     let creator_fee = c.atomic_u64()?;
     let _track = c.bool()?;
     let _ = c.u64()?;
@@ -385,8 +392,8 @@ fn decode_trade(
     let _ = c.u64()?;
     let _ = c.i64()?;
     let ix_name = c.string()?;
-    let _mayhem = c.bool()?;
-    let _ = c.u64()?;
+    let mayhem = c.bool()?;
+    let cashback_bps = c.u64()?;
     let cashback = c.atomic_u64()?;
     let _ = c.u64()?;
     let buyback = c.atomic_u64()?;
@@ -427,10 +434,26 @@ fn decode_trade(
             virtual_quote_atomic: Some(if v_quote.is_zero() { v_sol } else { v_quote }),
             real_base_atomic: Some(r_tok),
             real_quote_atomic: Some(if r_quote.is_zero() { r_sol } else { r_quote }),
-            raw_event: json!({"creator": creator.to_string()}),
+            raw_event: json!({
+                "creator": creator.to_string(),
+                "fee_basis_points": fee_bps,
+                "creator_fee_basis_points": creator_fee_bps,
+                "mayhem_mode": mayhem,
+                "cashback_fee_basis_points": cashback_bps,
+            }),
+            protocol_fee_bps: Some(fee_bps),
+            creator_fee_bps: Some(creator_fee_bps),
+            lp_fee_bps: None,
+            is_mayhem_mode: Some(mayhem),
+            creator_fee_applies: Some(creator != Pubkey(DEFAULT_PUBKEY)),
+            base_supply_atomic: None,
+            cashback_fee_bps: Some(cashback_bps),
         }),
     ))
 }
+
+/// `Pubkey::default()` — the all-zero key Pump uses to mean "no creator".
+const DEFAULT_PUBKEY: [u8; 32] = [0u8; 32];
 
 fn require_consumed(c: &BorshCursor<'_>, layout: &str) -> Result<(), DecodeError> {
     if c.remaining() == 0 {

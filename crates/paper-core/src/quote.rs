@@ -186,6 +186,10 @@ mod tests {
             migrated_market: None,
             config_snapshot_id: "test".into(),
             quality: DataQuality::live(0, 0, true),
+            is_mayhem_mode: None,
+            creator_fee_applies: None,
+            base_supply_atomic: None,
+            cashback_fee_bps: None,
         }
     }
 
