@@ -2,6 +2,7 @@ import * as Tabs from "@radix-ui/react-tabs";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect } from "react";
+import { CoordinationPanel } from "../../components/CoordinationPanel";
 import { EmptyState } from "../../components/EmptyState";
 import { QualityBadge } from "../../components/QualityBadge";
 import { api, ApiRequestError } from "../../lib/api";
@@ -11,6 +12,7 @@ import type {
   CreatorView,
   FeatureVector,
   GraphResponse,
+  Investigation,
   LaunchDetail,
   PortfolioSnapshotPosition,
   PredictionsResponse,
@@ -81,6 +83,11 @@ export function TokenPage() {
     queryFn: () => api.modelStates(launchId),
     enabled: Boolean(launchId),
     refetchInterval: 4_000,
+  });
+  const investigations = useQuery({
+    queryKey: ["investigations", launchId],
+    queryFn: () => api.launchInvestigations(launchId),
+    enabled: Boolean(launchId),
   });
   const portfolioSnapshot = useQuery({
     queryKey: ["portfolio-snapshot", activePortfolioId],
@@ -164,10 +171,11 @@ export function TokenPage() {
         <Tabs.Content value="models" className="min-h-0 flex-1 overflow-auto p-3">
           <StoredPredictions predictions={predictions.data} error={predictions.error?.message} />
         </Tabs.Content>
-        <Tabs.Content value="ai" className="p-3">
-          <EmptyState
-            title="AI advisory"
-            reason="POLICY EFFECT: NONE. SiliconFlow is advisory-only until a matched experiment reports lift versus the no-AI book."
+        <Tabs.Content value="ai" className="min-h-0 flex-1 overflow-auto p-3">
+          <AiAdvisoryTab
+            investigations={investigations.data?.items}
+            isLoading={investigations.isLoading}
+            error={investigations.error?.message}
           />
         </Tabs.Content>
         <Tabs.Content value="creator" className="p-3">
@@ -190,6 +198,119 @@ export function TokenPage() {
           />
         </Tabs.Content>
       </Tabs.Root>
+    </div>
+  );
+}
+
+function AiAdvisoryTab({
+  investigations,
+  isLoading,
+  error,
+}: {
+  investigations?: Investigation[];
+  isLoading: boolean;
+  error?: string;
+}) {
+  if (isLoading) return <div className="text-muted">Loading AI advisory history…</div>;
+  if (error) return <EmptyState title="AI advisory unavailable" reason={error} />;
+  if (!investigations?.length) {
+    return (
+      <EmptyState
+        title="No AI investigation yet"
+        reason="POLICY EFFECT: NONE — SiliconFlow is advisory-only, never a trading authority. An investigation is only spawned for a BUY or WATCH decision on this launch; nothing has qualified yet, or it's still running in the background."
+      />
+    );
+  }
+  return (
+    <div className="space-y-3">
+      <p className="text-label text-muted">
+        POLICY EFFECT: NONE. Advisory-only until a matched experiment reports lift versus the no-AI
+        book. Showing the {investigations.length} most recent investigation
+        {investigations.length === 1 ? "" : "s"} for this launch.
+      </p>
+      {investigations.map((inv) => (
+        <InvestigationCard key={inv.investigation_id} investigation={inv} />
+      ))}
+    </div>
+  );
+}
+
+function InvestigationCard({ investigation }: { investigation: Investigation }) {
+  const roles = investigation.response?.roles ?? {};
+  const roleNames = Object.keys(roles);
+  return (
+    <div className="panel p-3">
+      <div className="flex flex-wrap items-center gap-2 text-label text-muted">
+        <span className="font-mono">{investigation.created_at}</span>
+        <span>·</span>
+        <span>{investigation.provider}</span>
+        <span className="font-mono">{investigation.model_id}</span>
+        <span>·</span>
+        <span className="font-mono">as of slot {investigation.as_of_slot}</span>
+      </div>
+      {roleNames.length === 0 ? (
+        <p className="mt-2 text-unknown">No role output persisted for this investigation.</p>
+      ) : (
+        roleNames.map((role) => {
+          const r = roles[role];
+          const a = r.advisory ?? {};
+          return (
+            <div key={role} className="mt-3 border-t border-hairline pt-2">
+              <div className="flex items-center gap-2 text-label">
+                <span className="uppercase text-amber">{role}</span>
+                {r.degraded ? <span className="text-negative">DEGRADED</span> : null}
+                {r.validation?.provider_status ? (
+                  <span className="text-muted">{r.validation.provider_status}</span>
+                ) : null}
+                {typeof a.confidence === "number" ? (
+                  <span className="ml-auto font-mono tabular-nums text-muted">
+                    confidence {a.confidence.toFixed(2)}
+                  </span>
+                ) : null}
+              </div>
+              {a.summary ? <p className="mt-1 text-body">{a.summary}</p> : null}
+              <div className="mt-2 grid grid-cols-1 gap-3 md:grid-cols-2">
+                {a.bull_case?.length ? (
+                  <div>
+                    <div className="text-label text-positive">Bull case</div>
+                    <ul className="list-disc pl-4 text-label">
+                      {a.bull_case.map((item, i) => (
+                        <li key={i}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {a.bear_case?.length ? (
+                  <div>
+                    <div className="text-label text-negative">Bear case</div>
+                    <ul className="list-disc pl-4 text-label">
+                      {a.bear_case.map((item, i) => (
+                        <li key={i}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </div>
+              {a.missing_information?.length ? (
+                <div className="mt-2">
+                  <div className="text-label text-unknown">Missing information</div>
+                  <ul className="list-disc pl-4 text-label text-muted">
+                    {a.missing_information.map((item, i) => (
+                      <li key={i}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {r.validation?.cited_evidence_ids?.length ? (
+                <p className="mt-2 text-label text-muted">
+                  Cited evidence: {r.validation.cited_evidence_ids.length} IDs · grounded claims only, no
+                  relationship claim without a supporting evidence ID.
+                </p>
+              ) : null}
+            </div>
+          );
+        })
+      )}
     </div>
   );
 }
@@ -449,6 +570,7 @@ function CreatorSnippet({ address }: { address: string }) {
         Reputation {c.reputation === null ? "not calibrated" : c.reputation}
         {c.connected_buyers != null ? ` · connected buyers ${c.connected_buyers}` : ""}
       </p>
+      <CoordinationPanel address={c.creator} compact />
     </div>
   );
 }

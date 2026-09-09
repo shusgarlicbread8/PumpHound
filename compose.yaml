@@ -26,6 +26,7 @@ services:
       - ./db/postgres/013_model_registry_integrity.sql:/docker-entrypoint-initdb.d/013_model_registry_integrity.sql:ro
       - ./db/postgres/014_position_quarantine_propagation.sql:/docker-entrypoint-initdb.d/014_position_quarantine_propagation.sql:ro
       - ./db/postgres/015_intelligence_refresh_indexes.sql:/docker-entrypoint-initdb.d/015_intelligence_refresh_indexes.sql:ro
+      - ./db/postgres/016_pending_research_intent_index.sql:/docker-entrypoint-initdb.d/016_pending_research_intent_index.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U pumphound -d pumphound"]
       interval: 3s
@@ -47,6 +48,7 @@ services:
       - pumphound-ch:/var/lib/clickhouse
       - ./db/clickhouse/001_events.sql:/docker-entrypoint-initdb.d/001_events.sql:ro
       - ./db/clickhouse/002_insert_buffering.sql:/docker-entrypoint-initdb.d/002_insert_buffering.sql:ro
+      - ./db/clickhouse/config.d/memory.xml:/etc/clickhouse-server/config.d/memory.xml:ro
     ulimits:
       nofile:
         soft: 262144

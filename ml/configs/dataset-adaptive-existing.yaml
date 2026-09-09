@@ -2,7 +2,18 @@ schema_version: 1
 dataset_version: adaptive-short-horizon-v1
 feature_schema_version: features-v1
 corpus_kind: existing_canonical_adaptive
-promotion_eligible: false
+# No dataset built from this config has ever been eligible for champion promotion, by design:
+# event_sources below leans on a historical backfill (historical-canonical), and a model
+# shouldn't earn champion status by acing a static dump it never had to generalize from. But
+# there was no exit from that gate — live_label_count (samples actually sourced from this
+# system's own paper-trading journal) has grown past 11,000 for these targets and the flag never
+# moved. This threshold is that exit: once live_label_count clears it, promotion_eligible flips to
+# true (see labels/short_horizon.py::_live_sample_promotion_eligible). Half of the existing
+# minimum_matured_samples gate (10,000, in ml/configs/train-adaptive-short-horizon.yaml) — enough
+# that live evidence is the dominant contributor to the dataset, not a token minority next to the
+# historical backfill. It still has to separately clear every other promotion gate (matured
+# samples, positives, calibration, leakage audit, held-out metrics) unchanged.
+promotion_eligible_after_live_labels: 5000
 source_dataset_uri: artifacts/datasets/existing-shadow-v1
 snapshot_root: artifacts/datasets/adaptive
 event_sources:
@@ -17,6 +28,17 @@ split:
   method: inherited_chronological_purged_walk_forward
   source_dataset: artifacts/datasets/existing-shadow-v1
   random_row_split: false
+  # historical-canonical (event_sources above) runs 2024-02-01 through 2026-07-01 exactly, and
+  # live-canonical-journal picks up right at that boundary — verified directly against both raw
+  # files, not inferred. The plain 60/15/10/15 chronological split put 85% of assigned rows
+  # (train+validation) entirely inside the 2.5-year-old historical file and left the live journal
+  # confined to calibration+test — meaning training never saw a single live-sourced row, no matter
+  # how much live data existed. Measured impact on expected_mfe_5m_v1: 69% positive rate in train
+  # (2024-02 to 2025-05) vs 18% in test (last day of live trading) — the model learned a market
+  # regime that no longer exists, and held-out ROC-AUC came out to 0.39 (worse than a coin flip).
+  # 70 days safely covers the entire live journal from its first row while excluding virtually all
+  # of the historical file, so every split now draws from one consistent, current regime.
+  training_window_days: 70
 targets:
   - short_momentum_2m_v1
   - adverse_move_2m_v1

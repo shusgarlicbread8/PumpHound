@@ -122,6 +122,23 @@ def test_canonical_loader_has_no_network_path(tmp_path: Path, monkeypatch):
     assert [event.event_id for event in events] == ["event-a"]
 
 
+def test_malformed_json_line_is_skipped_and_reported_not_fatal(tmp_path: Path):
+    # A live journal is appended to continuously; two concurrent writers landing without the
+    # newline between them (two JSON objects concatenated on one physical line) used to abort
+    # the read of the *whole* file on the first such line, permanently blocking every future
+    # retraining run over one mechanical glitch rather than one lost event.
+    source = tmp_path / "events.jsonl"
+    good_a = json.dumps(_event("event-a", 1), sort_keys=True)
+    good_b = json.dumps(_event("event-b", 2), sort_keys=True)
+    concatenated = json.dumps(_event("event-bad-1", 3), sort_keys=True) + json.dumps(
+        _event("event-bad-2", 4), sort_keys=True
+    )
+    source.write_text(f"{good_a}\n{concatenated}\n{good_b}\n", encoding="utf-8")
+    events, manifest = load_canonical_sources({"events_uri": str(source)})
+    assert [event.event_id for event in events] == ["event-a", "event-b"]
+    assert manifest["sources"][0]["skipped_malformed_lines"] == [2]
+
+
 def test_raw_provider_records_are_explicitly_rejected(tmp_path: Path):
     raw = tmp_path / "raw"
     raw.mkdir()

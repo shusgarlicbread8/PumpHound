@@ -398,3 +398,147 @@ pub async fn cluster_response(stores: &Stores, id: &str) -> Value {
         "as_of": now_utc()
     })
 }
+
+const COORDINATION_EARLY_BUYER_DEPTH: i64 = 10;
+const COORDINATION_MAX_LAUNCHES: i64 = 50;
+
+/// Repeat-early-buyer detection for one creator: wallets that show up among the first
+/// COORDINATION_EARLY_BUYER_DEPTH buyers on two or more of this creator's launches. A stranger
+/// happening to snipe two unrelated tokens early is unremarkable; the same small wallet set doing
+/// it across most of one creator's launches is the textbook insider/self-funded-volume pattern —
+/// the creator (or someone coordinating with them) recycling capital across their own launches to
+/// fake early demand before exiting on real buyers. This is descriptive, not an accusation: it
+/// surfaces the overlap and its evidence (which launches, which wallets); it does not label
+/// anything a "rug".
+///
+/// Cross-references pumphound.derived_edges (CO_BOUGHT_WITH, computed by
+/// Stores::refresh_intelligence) so a repeat-buyer wallet found here can also show whether it
+/// co-buys with others *outside* this creator's launches too — i.e. whether it looks like a
+/// standing wallet ring rather than something specific to this one creator.
+pub async fn creator_coordination(stores: &Stores, creator: &str) -> Value {
+    let launches = sqlx::query(
+        r#"SELECT launch_id::text, mint FROM pumphound.launches
+           WHERE creator=$1
+             AND COALESCE(attributes->>'integrity_state','') <> 'QUARANTINED'
+           ORDER BY creation_slot DESC LIMIT $2"#,
+    )
+    .bind(creator)
+    .bind(COORDINATION_MAX_LAUNCHES)
+    .fetch_all(&stores.postgres)
+    .await
+    .unwrap_or_default();
+    let launch_count = launches.len();
+    if launches.is_empty() {
+        return json!({
+            "creator": creator,
+            "launches_examined": 0,
+            "early_buyer_depth": COORDINATION_EARLY_BUYER_DEPTH,
+            "distinct_early_buyers": 0,
+            "repeat_buyers": [],
+            "concentration_fraction": null,
+            "risk_label": "INSUFFICIENT_EVIDENCE",
+            "note": "no launches attributed to this creator",
+        });
+    }
+    let mints: Vec<String> = launches.iter().map(|r| r.get::<String, _>("mint")).collect();
+    let repeat_rows = sqlx::query(
+        r#"WITH ranked AS (
+          SELECT gf.asset_mint AS mint, gf.source_node AS wallet, gf.slot,
+                 row_number() OVER (PARTITION BY gf.asset_mint ORDER BY gf.slot ASC) AS rn
+          FROM pumphound.graph_facts gf
+          WHERE gf.edge_type='BOUGHT' AND gf.asset_mint = ANY($1)
+        ), early AS (
+          SELECT mint, wallet FROM ranked WHERE rn <= $2
+        )
+        SELECT wallet, count(DISTINCT mint) AS launches_touched,
+               array_agg(DISTINCT mint) AS mints
+        FROM early
+        GROUP BY wallet
+        HAVING count(DISTINCT mint) >= 2
+        ORDER BY launches_touched DESC, wallet
+        LIMIT 25"#,
+    )
+    .bind(&mints)
+    .bind(COORDINATION_EARLY_BUYER_DEPTH)
+    .fetch_all(&stores.postgres)
+    .await
+    .unwrap_or_default();
+    // Same ranked/early shape as the repeat-buyers query above (not a correlated subquery
+    // re-ranking per outer row, which is what made this take ~8s on a 30-launch creator).
+    let distinct_early_buyers: i64 = sqlx::query_scalar(
+        r#"WITH ranked AS (
+          SELECT gf.asset_mint AS mint, gf.source_node AS wallet,
+                 row_number() OVER (PARTITION BY gf.asset_mint ORDER BY gf.slot ASC) AS rn
+          FROM pumphound.graph_facts gf
+          WHERE gf.edge_type='BOUGHT' AND gf.asset_mint = ANY($1)
+        )
+        SELECT count(DISTINCT wallet) FROM ranked WHERE rn <= $2"#,
+    )
+    .bind(&mints)
+    .bind(COORDINATION_EARLY_BUYER_DEPTH)
+    .fetch_one(&stores.postgres)
+    .await
+    .unwrap_or(0);
+    let wallets: Vec<String> = repeat_rows.iter().map(|r| r.get::<String, _>("wallet")).collect();
+    let external_ties = if wallets.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query(
+            r#"SELECT source_node, target_node, evidence_count, score
+               FROM pumphound.derived_edges
+               WHERE edge_type='CO_BOUGHT_WITH' AND (source_node = ANY($1) OR target_node = ANY($1))
+               ORDER BY evidence_count DESC LIMIT 50"#,
+        )
+        .bind(&wallets)
+        .fetch_all(&stores.postgres)
+        .await
+        .unwrap_or_default()
+        .iter()
+        .map(|r| {
+            json!({
+                "source": r.get::<String, _>("source_node"),
+                "target": r.get::<String, _>("target_node"),
+                "evidence_count": r.try_get::<i32, _>("evidence_count").unwrap_or(0),
+                "score": r.try_get::<f64, _>("score").unwrap_or(0.0),
+            })
+        })
+        .collect::<Vec<_>>()
+    };
+    let repeat_buyers: Vec<Value> = repeat_rows
+        .iter()
+        .map(|r| {
+            let wallet: String = r.get("wallet");
+            let touched: i64 = r.get("launches_touched");
+            let mints: Vec<String> = r.try_get("mints").unwrap_or_default();
+            json!({
+                "wallet": wallet,
+                "launches_touched": touched,
+                "launches_touched_fraction": touched as f64 / launch_count as f64,
+                "mints": mints,
+            })
+        })
+        .collect();
+    let concentration_fraction = if distinct_early_buyers > 0 {
+        Some(repeat_buyers.len() as f64 / distinct_early_buyers as f64)
+    } else {
+        None
+    };
+    let risk_label = match (launch_count, concentration_fraction) {
+        (n, _) if n < 3 => "INSUFFICIENT_EVIDENCE",
+        (_, None) => "INSUFFICIENT_EVIDENCE",
+        (_, Some(f)) if f >= 0.35 => "HIGH_REPEAT_BUYER_CONCENTRATION",
+        (_, Some(f)) if f >= 0.15 => "ELEVATED_REPEAT_BUYER_CONCENTRATION",
+        _ => "NO_ELEVATED_CONCENTRATION_DETECTED",
+    };
+    json!({
+        "creator": creator,
+        "launches_examined": launch_count,
+        "early_buyer_depth": COORDINATION_EARLY_BUYER_DEPTH,
+        "distinct_early_buyers": distinct_early_buyers,
+        "repeat_buyers": repeat_buyers,
+        "external_co_buy_ties": external_ties,
+        "concentration_fraction": concentration_fraction,
+        "risk_label": risk_label,
+        "note": "Descriptive early-buyer overlap only, not an accusation. A wallet appearing here bought early into >=2 of this creator's launches; external_co_buy_ties shows the same wallets co-buying with others outside this creator's launches too.",
+    })
+}

@@ -31,9 +31,22 @@ def _reject_raw_source(path: Path) -> None:
         raise ValueError(f"raw_provider_source_forbidden:{path}")
 
 
-def _read_events(path: Path) -> tuple[list[tuple[str, ChainEvent]], str]:
+def _read_events(
+    path: Path,
+) -> tuple[list[tuple[str, ChainEvent]], str, list[int]]:
+    """Malformed JSON syntax on a line (not a data-quality problem, a *mechanical* one — the
+    live journal is appended to continuously by the collector, and two writes landing without
+    the newline between them, e.g. two concatenated objects on one line, produces exactly this)
+    used to abort the read of the *entire* file on the first occurrence. On a 262k-line journal
+    that meant one bad line, once, permanently blocked every future retraining run rather than
+    losing one event. Skip-and-count instead; the skipped line numbers are returned so callers
+    can put them in the source report rather than silently dropping the fact that anything was
+    skipped. Semantic problems in an otherwise-valid JSON row (missing event_id/slot/payload.kind,
+    wrong type) still hard-fail below — those are real data-quality issues, not a parser hiccup.
+    """
     digest = hashlib.sha256()
     events: list[tuple[str, ChainEvent]] = []
+    skipped_malformed_lines: list[int] = []
     with path.open("rb") as handle:
         for number, raw_line in enumerate(handle, start=1):
             digest.update(raw_line)
@@ -41,8 +54,9 @@ def _read_events(path: Path) -> tuple[list[tuple[str, ChainEvent]], str]:
                 continue
             try:
                 row = json.loads(raw_line)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"malformed_canonical_jsonl:{path}:{number}") from exc
+            except json.JSONDecodeError:
+                skipped_malformed_lines.append(number)
+                continue
             if not isinstance(row, dict):
                 raise TypeError(f"canonical_event_not_mapping:{path}:{number}")
             if (
@@ -58,7 +72,7 @@ def _read_events(path: Path) -> tuple[list[tuple[str, ChainEvent]], str]:
                     ChainEvent.from_mapping(row),
                 )
             )
-    return events, digest.hexdigest()
+    return events, digest.hexdigest(), skipped_malformed_lines
 
 
 def _date_range(events: list[ChainEvent]) -> dict[str, str | None]:
@@ -116,7 +130,7 @@ def load_canonical_sources(
                 f"canonical event source missing:{path}. Refusing to invent rows"
             )
         before = path.stat()
-        parsed_with_hash, file_hash = _read_events(path)
+        parsed_with_hash, file_hash, skipped_malformed_lines = _read_events(path)
         after = path.stat()
         if source.get("require_stable") and (
             before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns
@@ -151,6 +165,7 @@ def load_canonical_sources(
                 "row_count": len(parsed),
                 "unique_added": unique_added,
                 "duplicates": source_duplicates,
+                "skipped_malformed_lines": skipped_malformed_lines,
                 **_date_range(parsed),
                 "upstream_manifest_uri": manifest_uri,
                 "upstream_manifest_sha256": (

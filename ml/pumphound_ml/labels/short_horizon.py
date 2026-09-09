@@ -110,9 +110,36 @@ def _fetch_live_dataset(dsn: str) -> tuple[pl.DataFrame, pl.DataFrame]:
             }
         )
 
-    live_f = pl.DataFrame(records) if records else pl.DataFrame()
-    live_l = pl.DataFrame(lrecords) if lrecords else pl.DataFrame()
+    # `rec.update(vals)` above merges each feature snapshot's raw values dict straight in, with
+    # no type normalization — a real numeric feature (e.g. a return fraction) can be an integer
+    # in the rows Polars samples for schema inference (default: first 100) and a genuine float
+    # a few thousand rows later, and the default schema-inference length rejects that as a type
+    # conflict instead of just unifying to Float64. That exception was getting caught by the
+    # broad `except Exception` around this function's caller and silently logged, so live data
+    # was never actually incorporated into training — this ran, "succeeded", and used 0 live
+    # rows every time. infer_schema_length=None scans every row before committing to a dtype.
+    live_f = pl.DataFrame(records, infer_schema_length=None) if records else pl.DataFrame()
+    live_l = pl.DataFrame(lrecords, infer_schema_length=None) if lrecords else pl.DataFrame()
     return live_f, live_l
+
+
+def _live_sample_promotion_eligible(cfg: dict, live_label_count: int) -> bool:
+    """This dataset's default (`promotion_eligible: false` in every adaptive config on disk) is
+    deliberate: it's bootstrapped mostly from a historical backfill, and a model shouldn't earn
+    champion status by acing a static dump it never had to generalize from. But nothing used to
+    define an exit from that gate — the flag would stay false forever regardless of how much
+    genuinely-live, walk-forward-validated evidence accumulated. `promotion_eligible_after_live_
+    labels` in a dataset config is that exit: once live_label_count (samples sourced from this
+    system's own paper-trading journal, not the backfill) crosses the configured threshold, the
+    dataset earns eligibility. It still has to separately clear the existing quantity/quality
+    gates in registry.promotion_failures() (minimum_matured_samples, minimum_positives,
+    calibration, leakage audit, held-out metrics) — this only answers "is enough of the evidence
+    actually live," not "is the model good."
+    """
+    threshold = cfg.get("promotion_eligible_after_live_labels")
+    if threshold is None:
+        return False
+    return live_label_count >= int(threshold)
 
 
 def append_short_horizon_labels(dataset_config: str, *, dsn: str | None = None) -> dict:
@@ -302,7 +329,9 @@ def append_short_horizon_labels(dataset_config: str, *, dsn: str | None = None) 
         promotion_eligible=bool(
             cfg.get(
                 "promotion_eligible",
-                source_manifest.get("promotion_eligible", False),
+                _live_sample_promotion_eligible(cfg, live_label_count)
+                if "promotion_eligible_after_live_labels" in cfg
+                else source_manifest.get("promotion_eligible", False),
             )
         ),
         metadata={
@@ -312,6 +341,9 @@ def append_short_horizon_labels(dataset_config: str, *, dsn: str | None = None) 
             "paid_crawl": False,
             "live_label_count": live_label_count,
             "live_feature_count": live_feature_count,
+            "promotion_eligible_after_live_labels": cfg.get(
+                "promotion_eligible_after_live_labels"
+            ),
         },
     )
     return {

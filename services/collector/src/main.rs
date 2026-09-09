@@ -297,11 +297,23 @@ async fn main() -> anyhow::Result<()> {
                 .await
             {
                 use tokio::io::AsyncWriteExt;
+                // One buffer, one write_all call for the whole batch. O_APPEND only guarantees
+                // atomic positioning per write() syscall — writing content and its trailing
+                // newline as two separate write_all calls left a window where a concurrent
+                // writer (another task appending to the same path) could land its own full
+                // line in between, producing two JSON objects concatenated on one physical
+                // line with no newline separating them. That's exactly the corruption pattern
+                // ml/pumphound_ml/extraction/sources.py had to start tolerating (18 such lines
+                // found in the live journal). Batching into one write closes the window.
+                let mut batch = String::new();
                 for ev in &events {
                     if let Ok(line) = serde_json::to_string(ev) {
-                        let _ = f.write_all(line.as_bytes()).await;
-                        let _ = f.write_all(b"\n").await;
+                        batch.push_str(&line);
+                        batch.push('\n');
                     }
+                }
+                if !batch.is_empty() {
+                    let _ = f.write_all(batch.as_bytes()).await;
                 }
             }
         }

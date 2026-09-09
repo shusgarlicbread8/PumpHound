@@ -46,6 +46,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/v1/launches/{id}/decisions", get(decisions))
         .route("/api/v1/launches/{id}/graph", get(launch_graph))
         .route(
+            "/api/v1/launches/{id}/investigations",
+            get(launch_investigations),
+        )
+        .route(
             "/api/v1/launches/{id}/intelligence",
             get(launch_intelligence),
         )
@@ -55,6 +59,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/v1/wallets/{address}/funding", get(wallet_funding))
         .route("/api/v1/creators", get(creators_index))
         .route("/api/v1/creators/{address}", get(creator))
+        .route(
+            "/api/v1/creators/{address}/coordination",
+            get(creator_coordination),
+        )
         .route("/api/v1/clusters/{id}", get(cluster))
         .route("/api/v1/evidence/{id}", get(evidence))
         .route("/api/v1/launches/{id}/metadata", get(launch_metadata))
@@ -359,24 +367,138 @@ struct LaunchQ {
     cursor: Option<String>,
 }
 
+const RADAR_ROW_COLUMNS: &str = "l.launch_id::text, l.mint, l.protocol, l.quote_mint, l.creator, \
+     l.creation_slot, l.creation_time, l.known_at, l.attributes, \
+     (cp.attributes->>'risk_score')::float8 AS creator_risk_score";
+const RADAR_ROW_JOIN: &str =
+    "LEFT JOIN pumphound.creator_profiles cp ON cp.creator = l.creator";
+
+/// Builds one RadarRow from a `pumphound.launches` row (selecting RADAR_ROW_COLUMNS) plus the
+/// live in-memory market/window state. Shared by the REST snapshot (`GET /launches`) and the
+/// WebSocket delta path, so a row streamed over the wire is computed exactly the same way as one
+/// fetched fresh — no separate "lightweight" patch representation to drift out of sync.
+fn build_radar_row(
+    r: &sqlx::postgres::PgRow,
+    markets: &pumphound_market_state::InMemoryMarketReducer,
+    windows: &std::collections::HashMap<String, pumphound_feature_core::WindowAggregator>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> RadarRow {
+    let mint: String = r.get("mint");
+    let launch_id: String = r.get("launch_id");
+    let protocol: String = r.get("protocol");
+    let quote_mint: String = r.get("quote_mint");
+    let creator: String = r.get("creator");
+    let created: Option<chrono::DateTime<chrono::Utc>> = r
+        .try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("creation_time")
+        .ok()
+        .flatten();
+    let known_at: chrono::DateTime<chrono::Utc> = r.get("known_at");
+    let age = crate::launch_age::launch_age(created, Some(known_at), now);
+    let snap = markets
+        .get(&mint)
+        .filter(|snapshot| snapshot.mint.to_string() == mint);
+    let progress = snap.and_then(curve_progress);
+    let price = snap.and_then(executable_price_quote);
+    let agg = windows.get(&mint);
+    let buyers = agg
+        .map(|a| a.unique_buyers())
+        .filter(|n| *n > 0)
+        .unwrap_or_else(|| markets.buyer_count(&mint) as u64);
+    let imb = agg.and_then(|a| a.imbalance(30));
+    let flow = agg.and_then(|a| a.flow_quote(60));
+    let rank = age
+        .seconds
+        .map(|seconds| heuristic_rank(seconds, buyers as f64, imb, progress));
+    let stance = "WATCH";
+    let quality = snap
+        .map(|m| current_market_quality(m, now))
+        .unwrap_or_else(|| pumphound_domain::DataQuality::unknown("no live snapshot yet"));
+    let as_of = snap
+        .map(|m| m.as_of.clone())
+        .unwrap_or(pumphound_domain::ObservationPoint {
+            slot: pumphound_domain::Slot(r.get::<i64, _>("creation_slot") as u64),
+            tx_index: None,
+            event_index: None,
+            event_time: created,
+            observed_at: r.get("known_at"),
+            knowledge_cutoff: known_at,
+            commitment: pumphound_domain::Commitment::Confirmed,
+        });
+    let attrs: Value = r.try_get("attributes").unwrap_or(json!({}));
+    let creator_risk: Option<f64> = r.try_get("creator_risk_score").ok().flatten();
+    RadarRow {
+        launch_id,
+        mint: mint.clone(),
+        creator: Some(creator.clone()),
+        creator_risk,
+        symbol: attrs
+            .get("symbol")
+            .and_then(|v| v.as_str())
+            .or_else(|| attrs.pointer("/flags/symbol").and_then(|v| v.as_str()))
+            .map(|s| s.to_string()),
+        age_seconds: age.seconds,
+        age_basis: Some(age.basis.to_string()),
+        protocol,
+        quote_mint,
+        price_quote: price,
+        executable_depth_quote: snap.map(|m| m.effective_quote_atomic.to_string()),
+        curve_progress: progress,
+        buyers,
+        independent_clusters: None,
+        flow_60s_quote: flow.map(|f| f.to_string()),
+        graduation_6h: None,
+        collapse_1h: None,
+        heuristic_rank: rank,
+        prediction_id: None,
+        stance: stance.into(),
+        paper_position_id: None,
+        flags: vec![Flag {
+            code: "TARGET_MODEL_STATE_NOT_IN_RADAR_CONTRACT".into(),
+            evidence_id: mint,
+            severity: "info".into(),
+        }],
+        quality,
+        as_of,
+    }
+}
+
+/// Single-row lookup used to build a live WebSocket delta patch for one mint, instead of forcing
+/// every subscriber to re-fetch the full 200-row snapshot on every chain event (that fallback is
+/// still what happens for event kinds this doesn't cover, or if the launch isn't found).
+pub async fn radar_row_for_mint(state: &AppState, mint: &str) -> Option<RadarRow> {
+    let query = format!(
+        "SELECT {RADAR_ROW_COLUMNS} FROM pumphound.launches l {RADAR_ROW_JOIN} \
+         WHERE l.mint=$1 \
+         AND COALESCE(l.attributes->>'integrity_state','') <> 'QUARANTINED' LIMIT 1"
+    );
+    let row = sqlx::query(&query)
+        .bind(mint)
+        .fetch_optional(&state.stores.postgres)
+        .await
+        .ok()??;
+    let markets = state.markets.read().await;
+    let windows = state.windows.read().await;
+    Some(build_radar_row(&row, &markets, &windows, now_utc()))
+}
+
 async fn launches(State(s): State<Arc<AppState>>, Query(_q): Query<LaunchQ>) -> impl IntoResponse {
-    let rows = sqlx::query(
-        r#"SELECT launch_id::text, mint, protocol, quote_mint, creator, creation_slot, creation_time, known_at, attributes
-           FROM pumphound.launches l
-           WHERE mint NOT IN ($1,$2)
-             AND COALESCE(attributes->>'integrity_state','') <> 'QUARANTINED'
-             AND NOT EXISTS (
-               SELECT 1 FROM pumphound.entity_integrity_quarantines iq
-               WHERE iq.entity_type='LAUNCH'
-                 AND iq.entity_id=l.launch_id::text
-                 AND iq.status='ACTIVE'
-             )
-           ORDER BY creation_slot DESC LIMIT 200"#,
-    )
-    .bind(pumphound_domain::WSOL_MINT)
-    .bind(pumphound_domain::USDC_MINT)
-    .fetch_all(&s.stores.postgres)
-    .await;
+    let query = format!(
+        "SELECT {RADAR_ROW_COLUMNS} FROM pumphound.launches l {RADAR_ROW_JOIN} \
+         WHERE l.mint NOT IN ($1,$2) \
+           AND COALESCE(l.attributes->>'integrity_state','') <> 'QUARANTINED' \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM pumphound.entity_integrity_quarantines iq \
+             WHERE iq.entity_type='LAUNCH' \
+               AND iq.entity_id=l.launch_id::text \
+               AND iq.status='ACTIVE' \
+           ) \
+         ORDER BY l.creation_slot DESC LIMIT 200"
+    );
+    let rows = sqlx::query(&query)
+        .bind(pumphound_domain::WSOL_MINT)
+        .bind(pumphound_domain::USDC_MINT)
+        .fetch_all(&s.stores.postgres)
+        .await;
     let Ok(rows) = rows else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -389,84 +511,10 @@ async fn launches(State(s): State<Arc<AppState>>, Query(_q): Query<LaunchQ>) -> 
     let markets = s.markets.read().await;
     let windows = s.windows.read().await;
     let now = now_utc();
-    let mut items = Vec::new();
-    for r in rows {
-        let mint: String = r.get("mint");
-        let launch_id: String = r.get("launch_id");
-        let protocol: String = r.get("protocol");
-        let quote_mint: String = r.get("quote_mint");
-        let creator: String = r.get("creator");
-        let created: Option<chrono::DateTime<chrono::Utc>> = r
-            .try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("creation_time")
-            .ok()
-            .flatten();
-        let known_at: chrono::DateTime<chrono::Utc> = r.get("known_at");
-        let age = crate::launch_age::launch_age(created, Some(known_at), now);
-        let snap = markets
-            .get(&mint)
-            .filter(|snapshot| snapshot.mint.to_string() == mint);
-        let progress = snap.and_then(curve_progress);
-        let price = snap.and_then(executable_price_quote);
-        let agg = windows.get(&mint);
-        let buyers = agg
-            .map(|a| a.unique_buyers())
-            .filter(|n| *n > 0)
-            .unwrap_or_else(|| markets.buyer_count(&mint) as u64);
-        let imb = agg.and_then(|a| a.imbalance(30));
-        let flow = agg.and_then(|a| a.flow_quote(60));
-        let rank = age
-            .seconds
-            .map(|seconds| heuristic_rank(seconds, buyers as f64, imb, progress));
-        let stance = "WATCH";
-        let quality = snap
-            .map(|m| current_market_quality(m, now))
-            .unwrap_or_else(|| pumphound_domain::DataQuality::unknown("no live snapshot yet"));
-        let as_of = snap
-            .map(|m| m.as_of.clone())
-            .unwrap_or(pumphound_domain::ObservationPoint {
-                slot: pumphound_domain::Slot(r.get::<i64, _>("creation_slot") as u64),
-                tx_index: None,
-                event_index: None,
-                event_time: created,
-                observed_at: r.get("known_at"),
-                knowledge_cutoff: known_at,
-                commitment: pumphound_domain::Commitment::Confirmed,
-            });
-        let attrs: Value = r.try_get("attributes").unwrap_or(json!({}));
-        items.push(RadarRow {
-            launch_id,
-            mint: mint.clone(),
-            creator: Some(creator.clone()),
-            symbol: attrs
-                .get("symbol")
-                .and_then(|v| v.as_str())
-                .or_else(|| attrs.pointer("/flags/symbol").and_then(|v| v.as_str()))
-                .map(|s| s.to_string()),
-            age_seconds: age.seconds,
-            age_basis: Some(age.basis.to_string()),
-            protocol,
-            quote_mint,
-            price_quote: price,
-            executable_depth_quote: snap.map(|m| m.effective_quote_atomic.to_string()),
-            curve_progress: progress,
-            buyers,
-            independent_clusters: None,
-            flow_60s_quote: flow.map(|f| f.to_string()),
-            graduation_6h: None,
-            collapse_1h: None,
-            heuristic_rank: rank,
-            prediction_id: None,
-            stance: stance.into(),
-            paper_position_id: None,
-            flags: vec![Flag {
-                code: "TARGET_MODEL_STATE_NOT_IN_RADAR_CONTRACT".into(),
-                evidence_id: mint,
-                severity: "info".into(),
-            }],
-            quality,
-            as_of,
-        });
-    }
+    let items: Vec<RadarRow> = rows
+        .iter()
+        .map(|r| build_radar_row(r, &markets, &windows, now))
+        .collect();
     Json(json!({
         "as_of": now,
         "stream_cursor": {"epoch": s.stream_epoch, "sequence": *s.sequence.read().await},
@@ -916,6 +964,13 @@ async fn creator(State(s): State<Arc<AppState>>, Path(address): Path<String>) ->
         "reputation": null,
         "note": "graduation_rate is observed migrate/complete share only; null if no such rows"
     }))
+}
+
+async fn creator_coordination(
+    State(s): State<Arc<AppState>>,
+    Path(address): Path<String>,
+) -> Json<Value> {
+    Json(crate::intelligence::creator_coordination(&s.stores, &address).await)
 }
 
 async fn cluster(State(s): State<Arc<AppState>>, Path(id): Path<String>) -> Json<Value> {
@@ -2259,6 +2314,17 @@ async fn start_investigation(
     match crate::investigator::load_investigation(&s.stores, investigation_id).await {
         Ok(Some(value)) => Json(value).into_response(),
         _ => internal_error_response("investigation persistence failed"),
+    }
+}
+
+async fn launch_investigations(
+    State(s): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match crate::investigator::list_investigations_for_subject(&s.stores, "launch", &id, 10).await
+    {
+        Ok(items) => Json(json!({ "items": items })).into_response(),
+        Err(error) => internal_error_response(error),
     }
 }
 

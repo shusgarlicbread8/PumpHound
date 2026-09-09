@@ -19,6 +19,14 @@ UNTRUSTED_FIELDS = (
     "social",
     "socials",
     "profile_text",
+    # Exa web-search hits (narrative_search): arbitrary third-party page text, same trust level
+    # as the social-bio fields above — quote it, don't treat it as fact or instructions. "answer"
+    # is Exa's own synthesized cross-source answer (narrative_search uses /answer, not /search) —
+    # still built from the same scraped web pages, so it carries the same injection risk as a raw
+    # snippet and gets the same treatment, not a lighter one just because it reads more cleanly.
+    "answer",
+    "title",
+    "snippet",
 )
 
 STRUCTURED_SECTIONS = (
@@ -33,6 +41,7 @@ STRUCTURED_SECTIONS = (
     "cohorts",
     "clusters",
     "tx_evidence",
+    "narrative_search",
 )
 
 

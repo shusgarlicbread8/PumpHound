@@ -1842,6 +1842,11 @@ async fn scan_heuristic_entries(
             }
             let loaded = experiment.for_book(desk.book);
             let policy = &loaded.policy;
+            let (sized_atomic, sizing_evidence) = confidence_scaled_atomic(
+                policy.fixed_sol_atomic,
+                desk.book.key,
+                shared_shadow.as_ref(),
+            );
             let open_positions =
                 portfolio_exposure_count(&state.stores, desk.portfolio_id, desk.run_id).await?;
             let mut input = shared_input.clone();
@@ -1934,6 +1939,7 @@ async fn scan_heuristic_entries(
                 "signal_policy": policy.strategy_version,
                 "independent_book": true,
                 "shadow_prediction": shared_shadow,
+                "position_sizing": sizing_evidence,
                 "funnel_stage": funnel_stage_for_reasons(&book_decision.reasons)
             });
             ensure_complete_heuristic_evidence(&exact_inputs)?;
@@ -1980,9 +1986,17 @@ async fn scan_heuristic_entries(
             }
             let mut book_request =
                 heuristic_entry_request(desk.portfolio_id, launch_id, &snapshot, policy)?;
+            book_request.input.atomic = Atomic(sized_atomic);
             let Some(mut quote) = quote_order(&book_request, &snapshot).ok() else {
                 continue;
             };
+            // A scaled-up size can push slippage past what this book's own policy allows even
+            // though the base size would have cleared it — re-check rather than trust the
+            // pre-sizing decision, and skip the trade (never silently fall back to the base size,
+            // which would hide that scaling pushed this past the book's own risk limit).
+            if quote.price_impact_bps > policy.maximum_entry_impact_bps {
+                continue;
+            }
             book_request.decision_id = decision_id;
             book_request.client_request_id = decision_id;
             book_request.quote_id = Uuid::now_v7();
@@ -2704,6 +2718,59 @@ fn heuristic_entry_request(
     })
 }
 
+// Every book used to bet the exact same fixed_sol_atomic on every trade regardless of how strong
+// the setup looked — the shadow model could tell you "this one's a coin flip" or "this one looks
+// good" and it made zero difference to size. This scales the base size by the shadow prediction's
+// edge (short-momentum probability net of adverse-move probability), the same momentum-minus-
+// downside idea evaluate_opportunity already uses for expected_net_edge on the ML-controlled path.
+//
+// Bounded to a narrow band (0.4x-1.8x) on purpose: this is fractional-Kelly in spirit — bet more
+// on more conviction — not literal Kelly (f* = edge/odds), because a single mis-calibrated shadow
+// reading should never be able to zero out a book's exposure or blow it out to a dangerous size.
+// CONTROL_FLOW_V1 is excluded: it exists specifically as a flat-bet baseline other books are
+// measured against, and confidence-weighting it would defeat that purpose.
+const SIZE_SCALING_MIN_MULTIPLIER: f64 = 0.4;
+const SIZE_SCALING_MAX_MULTIPLIER: f64 = 1.8;
+const SIZE_SCALING_EDGE_AT_MAX: f64 = 0.3;
+
+fn confidence_scaled_atomic(
+    base_atomic: u128,
+    book_key: &str,
+    shadow: Option<&AggregatePrediction>,
+) -> (u128, Option<Value>) {
+    if book_key == STRATEGY_CONTROL_FLOW_V1 {
+        return (base_atomic, None);
+    }
+    let Some(prediction) = shadow else {
+        return (base_atomic, None);
+    };
+    let (Some(momentum), Some(adverse)) = (
+        prediction.probability(SHORT_MOMENTUM_TARGET),
+        prediction.probability(ADVERSE_MOVE_TARGET),
+    ) else {
+        return (base_atomic, None);
+    };
+    let edge = momentum - adverse;
+    let t = (edge / SIZE_SCALING_EDGE_AT_MAX).clamp(0.0, 1.0);
+    let multiplier = SIZE_SCALING_MIN_MULTIPLIER
+        + t * (SIZE_SCALING_MAX_MULTIPLIER - SIZE_SCALING_MIN_MULTIPLIER);
+    let scaled = ((base_atomic as f64) * multiplier).round().max(1.0) as u128;
+    (
+        scaled,
+        Some(json!({
+            "base_atomic": base_atomic.to_string(),
+            "scaled_atomic": scaled.to_string(),
+            "multiplier": multiplier,
+            "shadow_momentum_probability": momentum,
+            "shadow_adverse_move_probability": adverse,
+            "edge": edge,
+            "min_multiplier": SIZE_SCALING_MIN_MULTIPLIER,
+            "max_multiplier": SIZE_SCALING_MAX_MULTIPLIER,
+            "edge_at_max_multiplier": SIZE_SCALING_EDGE_AT_MAX
+        })),
+    )
+}
+
 async fn scan_ml_entries(
     state: &Arc<AppState>,
     model: &ModelClient,
@@ -3242,7 +3309,7 @@ async fn feature_snapshot(
             .cloned()
             .unwrap_or(Value::Null),
     );
-    let indicators = intelligence_indicators(state, creator, &snapshot.as_of).await?;
+    let indicators = intelligence_indicators(state, creator, mint, &snapshot.as_of).await?;
     for name in [
         "creator_risk",
         "wallet_risk",
@@ -3299,6 +3366,7 @@ fn lifetime_buyers(in_memory: u64, durable: i64) -> u64 {
 async fn intelligence_indicators(
     state: &AppState,
     creator: &str,
+    mint: &str,
     as_of: &pumphound_domain::ObservationPoint,
 ) -> anyhow::Result<Value> {
     let mut indicators = OPTIONAL_GRAPH_FEATURE_NAMES
@@ -3352,6 +3420,26 @@ async fn intelligence_indicators(
         ] {
             indicators.insert(name.into(), json_number(&row, name));
         }
+    }
+    // launches has no updated_at column, so holder_concentration_computed_at (stored inside
+    // attributes by Stores::refresh_holder_concentration) is what bounds this read to the
+    // decision's own knowledge cutoff instead — a replayed historical decision must not see a
+    // concentration score computed after the fact.
+    let holder_row = sqlx::query(
+        r#"SELECT attributes->'holder_top_1_share' AS holder_top_1_share
+           FROM pumphound.launches
+           WHERE mint=$1
+             AND (attributes->>'holder_concentration_computed_at')::timestamptz <= $2"#,
+    )
+    .bind(mint)
+    .bind(as_of.knowledge_cutoff)
+    .fetch_optional(&state.stores.postgres)
+    .await?;
+    if let Some(row) = holder_row {
+        indicators.insert(
+            "holder_top_1_share".into(),
+            json_number(&row, "holder_top_1_share"),
+        );
     }
     let reputation = sqlx::query(
         r#"SELECT sample_count,posterior,coverage
@@ -3634,6 +3722,89 @@ mod tests {
         assert!(autonomous_mode("LIVE_PAPER_SHADOW_ML"));
         assert!(autonomous_mode("LIVE_PAPER_ML"));
         assert!(autonomous_mode("REPLAY"));
+    }
+
+    fn shadow_prediction(momentum: f64, adverse: f64) -> AggregatePrediction {
+        AggregatePrediction {
+            status: "SHADOW".into(),
+            authority: Some("SHADOW".into()),
+            prediction_id: "p".into(),
+            feature_snapshot_id: "s".into(),
+            launch_id: "l".into(),
+            observation_window_seconds: 120,
+            probabilities: BTreeMap::from([
+                (SHORT_MOMENTUM_TARGET.into(), Some(momentum)),
+                (ADVERSE_MOVE_TARGET.into(), Some(adverse)),
+            ]),
+            target_model_versions: BTreeMap::new(),
+            familiarity: BTreeMap::new(),
+            withheld_reasons: BTreeMap::new(),
+            explanations: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn no_shadow_prediction_keeps_the_base_size() {
+        let (atomic, evidence) = confidence_scaled_atomic(50_000_000, "FULL_ML_SHADOW", None);
+        assert_eq!(atomic, 50_000_000);
+        assert!(evidence.is_none());
+    }
+
+    #[test]
+    fn control_flow_book_is_never_scaled_even_with_a_strong_signal() {
+        let prediction = shadow_prediction(0.9, 0.0);
+        let (atomic, evidence) =
+            confidence_scaled_atomic(50_000_000, STRATEGY_CONTROL_FLOW_V1, Some(&prediction));
+        assert_eq!(atomic, 50_000_000, "control baseline must stay flat-bet");
+        assert!(evidence.is_none());
+    }
+
+    #[test]
+    fn breakeven_edge_sizes_at_the_floor_multiplier() {
+        // momentum == adverse -> edge == 0 -> minimum multiplier, not the base size unscaled.
+        let prediction = shadow_prediction(0.5, 0.5);
+        let (atomic, evidence) =
+            confidence_scaled_atomic(50_000_000, "FULL_ML_SHADOW", Some(&prediction));
+        assert_eq!(atomic, (50_000_000.0 * SIZE_SCALING_MIN_MULTIPLIER).round() as u128);
+        assert!(evidence.is_some());
+    }
+
+    #[test]
+    fn strong_edge_sizes_at_the_ceiling_multiplier_not_beyond() {
+        // edge = 0.9, far past SIZE_SCALING_EDGE_AT_MAX -> clamps at the max multiplier.
+        let prediction = shadow_prediction(0.95, 0.05);
+        let (atomic, _) = confidence_scaled_atomic(50_000_000, "FULL_ML_SHADOW", Some(&prediction));
+        assert_eq!(atomic, (50_000_000.0 * SIZE_SCALING_MAX_MULTIPLIER).round() as u128);
+    }
+
+    #[test]
+    fn mid_edge_sizes_strictly_between_floor_and_ceiling() {
+        let low = confidence_scaled_atomic(50_000_000, "FULL_ML_SHADOW", Some(&shadow_prediction(0.5, 0.5))).0;
+        let mid = confidence_scaled_atomic(50_000_000, "FULL_ML_SHADOW", Some(&shadow_prediction(0.65, 0.5))).0;
+        let high = confidence_scaled_atomic(50_000_000, "FULL_ML_SHADOW", Some(&shadow_prediction(0.8, 0.5))).0;
+        assert!(low < mid, "more edge must size up, not down or flat");
+        assert!(mid < high, "more edge must keep sizing up monotonically");
+    }
+
+    #[test]
+    fn missing_target_probability_falls_back_to_base_size() {
+        let prediction = AggregatePrediction {
+            status: "SHADOW".into(),
+            authority: Some("SHADOW".into()),
+            prediction_id: "p".into(),
+            feature_snapshot_id: "s".into(),
+            launch_id: "l".into(),
+            observation_window_seconds: 120,
+            probabilities: BTreeMap::from([(SHORT_MOMENTUM_TARGET.into(), Some(0.9))]), // adverse missing
+            target_model_versions: BTreeMap::new(),
+            familiarity: BTreeMap::new(),
+            withheld_reasons: BTreeMap::new(),
+            explanations: BTreeMap::new(),
+        };
+        let (atomic, evidence) =
+            confidence_scaled_atomic(50_000_000, "FULL_ML_SHADOW", Some(&prediction));
+        assert_eq!(atomic, 50_000_000, "can't scale on a half-known edge");
+        assert!(evidence.is_none());
     }
 
     #[test]

@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 
 from pumphound_ml.evaluation.metrics import classification_report
+from pumphound_ml.training.xgboost_model import training_thread_cap
 
 
 def _lightgbm():
@@ -45,6 +46,7 @@ def train_lightgbm(
         "learning_rate": 0.03,
         "n_estimators": 200,
         "early_stopping_rounds": 20,
+        "n_jobs": training_thread_cap(),
         **(params or {}),
     }
     x_tr, y_tr = _matrix(train_rows, feature_names, target)

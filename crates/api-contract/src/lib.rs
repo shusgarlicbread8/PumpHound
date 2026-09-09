@@ -27,6 +27,14 @@ pub struct RadarRow {
     pub flags: Vec<Flag>,
     pub quality: DataQuality,
     pub as_of: ObservationPoint,
+    /// Repeat-early-buyer-concentration score (0-1) from
+    /// Stores::refresh_creator_coordination_risk, the same number that gates paper entries via
+    /// OpportunityInput.creator_risk. Riding along on the row that's already fetched for every
+    /// launch means Radar can flag it without a per-row coordination query — with up to 200 rows
+    /// visible at once, a per-row live query here would be exactly the request-storm pattern
+    /// fixed elsewhere this session.
+    #[serde(default)]
+    pub creator_risk: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

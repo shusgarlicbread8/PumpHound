@@ -61,6 +61,51 @@ def test_replay_splits_match_chronological_splits():
     assert manifest["row_count"] == feat.height
 
 
+def test_training_window_days_excludes_stale_launches_from_every_split():
+    # Two eras separated by a 400-day gap: an old "historical corpus" era (should be entirely
+    # excluded by a 70-day window) and a recent 10-day "live" era (should be split normally).
+    old_era = [
+        {
+            "launch_id": f"old-{i}",
+            "cutoff_time": f"2024-01-{(i % 28) + 1:02d}T00:00:00Z",
+            "creator": f"c{i}",
+        }
+        for i in range(20)
+    ]
+    recent_era = [
+        {
+            "launch_id": f"recent-{i}",
+            "cutoff_time": f"2025-03-{(i % 10) + 1:02d}T00:00:00Z",
+            "creator": f"c{i}",
+        }
+        for i in range(20)
+    ]
+    assign = chronological_splits(
+        old_era + recent_era,
+        {"training_window_days": 70, "random_row_split": False},
+    )
+    old_assignments = {assign[row["launch_id"]] for row in old_era}
+    recent_assignments = {assign[row["launch_id"]] for row in recent_era}
+    assert old_assignments == {"excluded_stale"}
+    assert recent_assignments <= {"train", "validation", "calibration", "test"}
+    # The window must not just tag stale rows differently — it must keep them out of every real
+    # split, otherwise a caller that filters `== "train"` etc. is fine but one that treats
+    # "anything not explicitly excluded" as trainable (e.g. replace_strict(..., default="train"))
+    # would silently pull the old era straight back into training.
+    assert "excluded_stale" not in {"train", "validation", "calibration", "test"}
+
+
+def test_training_window_days_unset_matches_prior_unbounded_behavior():
+    rows = [
+        {"launch_id": f"l{i}", "cutoff_time": f"2024-01-{(i % 28) + 1:02d}T00:00:00Z", "creator": f"c{i}"}
+        for i in range(20)
+    ]
+    with_window = chronological_splits(rows, {"random_row_split": False})
+    without_window_key = chronological_splits(rows, {"training_window_days": None, "random_row_split": False})
+    assert with_window == without_window_key
+    assert "excluded_stale" not in with_window.values()
+
+
 def test_dataset_features_never_see_future_knowledge():
     events = load_events(load_jsonl("fixtures/replay/events.jsonl"))
     created = next(

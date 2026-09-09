@@ -65,6 +65,8 @@ export interface RadarRow {
   mint: string;
   symbol: string | null;
   creator?: string | null;
+  /** Repeat-early-buyer-concentration score (0-1), same number that gates paper entries. */
+  creator_risk?: number | null;
   age_seconds: number | null;
   age_basis?: "chain_create" | "first_observed" | "unknown" | string | null;
   protocol: Protocol | string;
@@ -361,6 +363,75 @@ export interface CreatorView {
   connected_buyers?: number | null;
   launch_count?: number | null;
   pnl_status?: string | null;
+}
+
+export interface CreatorCoordinationRepeatBuyer {
+  wallet: string;
+  launches_touched: number;
+  launches_touched_fraction: number;
+  mints: string[];
+}
+
+export interface CreatorCoordinationTie {
+  source: string;
+  target: string;
+  evidence_count: number;
+  score: number;
+}
+
+export type CoordinationRiskLabel =
+  | "INSUFFICIENT_EVIDENCE"
+  | "NO_ELEVATED_CONCENTRATION_DETECTED"
+  | "ELEVATED_REPEAT_BUYER_CONCENTRATION"
+  | "HIGH_REPEAT_BUYER_CONCENTRATION"
+  | string;
+
+export interface CreatorCoordination {
+  creator: string;
+  launches_examined: number;
+  early_buyer_depth: number;
+  distinct_early_buyers: number;
+  repeat_buyers: CreatorCoordinationRepeatBuyer[];
+  external_co_buy_ties?: CreatorCoordinationTie[];
+  concentration_fraction: number | null;
+  risk_label: CoordinationRiskLabel;
+  note: string;
+}
+
+export interface InvestigationAdvisory {
+  summary?: string;
+  bear_case?: string[];
+  bull_case?: string[];
+  claims?: unknown[];
+  confidence?: number;
+  creator_risks?: unknown[];
+  wallet_risks?: unknown[];
+  coordination_hypotheses?: unknown[];
+  contradictory_evidence?: unknown[];
+  missing_information?: string[];
+}
+
+export interface InvestigationRole {
+  advisory: InvestigationAdvisory;
+  provider: string;
+  model_id: string;
+  prompt_version: string;
+  degraded: boolean;
+  validation?: { ok?: boolean; provider_status?: string; cited_evidence_ids?: string[] };
+}
+
+export interface Investigation {
+  investigation_id: string;
+  subject_type: string;
+  subject_id: string;
+  as_of_slot: string;
+  evidence_pack_sha256: string;
+  provider: string;
+  model_id: string;
+  prompt_version: string;
+  role: string;
+  response: { roles?: Record<string, InvestigationRole> };
+  created_at: string;
 }
 
 export interface PredictionsResponse {

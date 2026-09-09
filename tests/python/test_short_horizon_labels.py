@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 from pumphound_ml.labels.paths import short_horizon_labels
+from pumphound_ml.labels.short_horizon import _live_sample_promotion_eligible
 
 
 def test_short_horizon_labels_mature_within_minutes():
@@ -37,3 +38,15 @@ def test_short_horizon_labels_censor_when_path_is_too_short():
         observed_until=cutoff + timedelta(seconds=10),
     )
     assert {item.status for item in labels} == {"censored"}
+
+
+def test_live_sample_promotion_eligible_requires_a_configured_threshold():
+    # No threshold configured -> stays permanently ineligible, the historical default.
+    assert _live_sample_promotion_eligible({}, live_label_count=999_999) is False
+
+
+def test_live_sample_promotion_eligible_gates_on_the_configured_threshold():
+    cfg = {"promotion_eligible_after_live_labels": 5000}
+    assert _live_sample_promotion_eligible(cfg, live_label_count=4_999) is False
+    assert _live_sample_promotion_eligible(cfg, live_label_count=5_000) is True
+    assert _live_sample_promotion_eligible(cfg, live_label_count=11_306) is True

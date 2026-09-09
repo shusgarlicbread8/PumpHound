@@ -5,15 +5,26 @@ use sqlx::Row;
 const LEARN: &str = pumphound_paper_core::ADAPTIVE_EXPERIMENT_ID;
 
 pub async fn home(state: &AppState) -> anyhow::Result<Value> {
-    let readiness = crate::readiness::as_json(state).await;
-    let hot = crate::hot_set::report(&state.stores)
-        .await
-        .unwrap_or_else(|_| json!({"active_count": 0, "members": [], "recent_events": []}));
-    let strategies = crate::paper_ledger::strategy_reports(&state.stores)
-        .await
-        .unwrap_or_else(|_| json!({"items": []}));
-    let learning = learning_slice(state).await.unwrap_or_else(|_| json!({}));
-    let portfolio = portfolio_slice(state).await.unwrap_or_else(|error| {
+    // These eight slices are independent reads (readiness/hot-set/strategies/learning/
+    // portfolio/opportunities/activity/alerts) that home() used to await one at a time.
+    // Under concurrent Postgres load from the collector, that serialization stacks each
+    // slice's queue time on top of the last and was a direct contributor to /api/v1/home
+    // latency spikes. None of them write shared state, so joining them lets the pool
+    // service them concurrently instead of queueing behind each other.
+    let (readiness, hot, strategies, learning, portfolio, opportunities, activity, alerts) = tokio::join!(
+        crate::readiness::as_json(state),
+        crate::hot_set::report(&state.stores),
+        crate::paper_ledger::strategy_reports(&state.stores),
+        learning_slice(state),
+        portfolio_slice(state),
+        opportunity_feed(state),
+        away_feed(state),
+        crate::readiness::alerts_json(state),
+    );
+    let hot = hot.unwrap_or_else(|_| json!({"active_count": 0, "members": [], "recent_events": []}));
+    let strategies = strategies.unwrap_or_else(|_| json!({"items": []}));
+    let learning = learning.unwrap_or_else(|_| json!({}));
+    let portfolio = portfolio.unwrap_or_else(|error| {
         tracing::warn!(%error, "home portfolio truth summary failed");
         json!({
             "status": "UNAVAILABLE",
@@ -23,9 +34,8 @@ pub async fn home(state: &AppState) -> anyhow::Result<Value> {
             "realized_pnl": null
         })
     });
-    let opportunities = opportunity_feed(state).await.unwrap_or_default();
-    let activity = away_feed(state).await.unwrap_or_default();
-    let alerts = crate::readiness::alerts_json(state).await;
+    let opportunities = opportunities.unwrap_or_default();
+    let activity = activity.unwrap_or_default();
     let health = state.health.read().await;
     let now = pumphound_domain::now_utc();
     Ok(json!({

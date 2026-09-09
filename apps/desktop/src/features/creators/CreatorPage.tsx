@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import { CoordinationPanel } from "../../components/CoordinationPanel";
 import { EmptyState } from "../../components/EmptyState";
 import { api } from "../../lib/api";
 import { truncatePubkey } from "../../lib/format";
@@ -125,6 +126,7 @@ export function CreatorPage() {
           </>
         ) : null}
       </p>
+      <CoordinationPanel address={address} />
       {!q.data.launches.length ? (
         <EmptyState title="No launches" reason="Unknown coverage is valid until history jobs complete." />
       ) : (

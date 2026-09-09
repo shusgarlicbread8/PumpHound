@@ -5,6 +5,7 @@ import {
   type CandidateDossier,
   type CandidateEnrichmentStatus,
   type Capabilities,
+  type CreatorCoordination,
   type CreatorView,
   type EvidenceRecord,
   type EnrichedWallet,
@@ -12,6 +13,7 @@ import {
   type GraphResponse,
   type HealthResponse,
   type HoldersResponse,
+  type Investigation,
   type LaunchDetail,
   type DecisionsResponse,
   type LaunchesSnapshot,
@@ -123,6 +125,8 @@ export const api = {
     apiGet<PredictionsResponse>(`/launches/${encodeURIComponent(id)}/predictions`),
   decisions: (id: string) => apiGet<DecisionsResponse>(`/launches/${encodeURIComponent(id)}/decisions`),
   launchGraph: (id: string) => apiGet<GraphResponse>(`/launches/${encodeURIComponent(id)}/graph`),
+  launchInvestigations: (id: string) =>
+    apiGet<{ items: Investigation[] }>(`/launches/${encodeURIComponent(id)}/investigations`),
   launchIntelligence: (id: string) =>
     apiGet<Record<string, unknown>>(`/launches/${encodeURIComponent(id)}/intelligence`),
 
@@ -134,6 +138,8 @@ export const api = {
     apiGet<WalletFundingResponse>(`/wallets/${encodeURIComponent(address)}/funding`),
   creators: () => apiGet<{ items: Record<string, unknown>[] }>("/creators"),
   creator: (address: string) => apiGet<CreatorView>(`/creators/${encodeURIComponent(address)}`),
+  creatorCoordination: (address: string) =>
+    apiGet<CreatorCoordination>(`/creators/${encodeURIComponent(address)}/coordination`),
   evidence: (id: string) => apiGet<EvidenceRecord>(`/evidence/${encodeURIComponent(id)}`),
   enrichmentStatus: () => apiGet<CandidateEnrichmentStatus>("/enrichment/status"),
   candidateDossier: (decisionId: string) =>

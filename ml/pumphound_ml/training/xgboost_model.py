@@ -2,11 +2,31 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import numpy as np
 
 from pumphound_ml.evaluation.metrics import classification_report
+
+# XGBoost defaults to every CPU thread on the machine, and one adaptive_retrain job fits several
+# models per cycle (a target's serving model plus up to four ablation models, times however many
+# targets are configured) — with no cap, retraining pinned all 14 cores on this Mac and everything
+# else (core-api, Postgres, ClickHouse) starved for the run's duration; /api/v1/home measured 20s
+# during one such run. Retraining is not latency-sensitive the way live serving is, so it should
+# yield cores rather than take all of them. Override with PUMPHOUND_TRAINING_MAX_THREADS if the
+# host has more headroom (a dedicated training machine, say) or less.
+_DEFAULT_MAX_THREADS = 4
+
+
+def training_thread_cap() -> int:
+    raw = os.environ.get("PUMPHOUND_TRAINING_MAX_THREADS")
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    return _DEFAULT_MAX_THREADS
 
 
 def _xgboost():
@@ -53,6 +73,7 @@ def train_xgboost(
         "learning_rate": 0.03,
         "n_estimators": 200,
         "early_stopping_rounds": 20,
+        "n_jobs": training_thread_cap(),
         **(params or {}),
     }
     x_tr, y_tr = _matrix(train_rows, feature_names, target)

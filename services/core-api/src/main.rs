@@ -22,7 +22,7 @@ mod truth;
 use anyhow::Context;
 use futures::StreamExt;
 use pumphound_chain_source::SourceConfig;
-use pumphound_domain::ChainEvent;
+use pumphound_domain::{ChainEvent, ChainEventPayload};
 use pumphound_storage::Stores;
 use state::AppState;
 use std::sync::Arc;
@@ -56,6 +56,18 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Trades and new launches are the two event kinds that change what a radar row looks like
+/// (price/curve/buyers move on a trade; a new row appears on a launch). Everything else
+/// (migrations, liquidity changes, quarantines, transfers) still reaches subscribers as a bare
+/// notification and falls back to the debounced full refetch.
+fn event_mint(payload: &ChainEventPayload) -> Option<String> {
+    match payload {
+        ChainEventPayload::TradeExecuted(t) => Some(t.mint.to_string()),
+        ChainEventPayload::LaunchCreated(l) => Some(l.mint.to_string()),
+        _ => None,
+    }
+}
+
 fn consume_normalized(state: Arc<AppState>) {
     tokio::spawn(async move {
         loop {
@@ -79,12 +91,34 @@ fn consume_normalized(state: Arc<AppState>) {
                                     // perceived a permanent gap and force-resynced on nearly every
                                     // message.
                                     let seq = state.next_seq().await;
-                                    let _ = state.radar_tx.send(serde_json::json!({
+                                    let mut payload = serde_json::json!({
                                         "topic": "radar",
                                         "event_id": ev.event_id,
                                         "kind": format!("{:?}", ev.payload).split('(').next(),
                                         "seq": seq,
-                                    }));
+                                    });
+                                    // Trades and new launches are the only events that change what
+                                    // a radar row looks like. Embedding the recomputed row inline
+                                    // (built the exact same way GET /launches builds one — see
+                                    // routes::build_radar_row) lets subscribers patch that one row
+                                    // instead of every client re-fetching the full 200-row snapshot
+                                    // on every single chain event, which is what happened before:
+                                    // deltas carried no row data, so onDelta always fell through to
+                                    // a full refetch.
+                                    if let Some(mint) = event_mint(&ev.payload) {
+                                        if let Some(row) =
+                                            crate::routes::radar_row_for_mint(&state, &mint).await
+                                        {
+                                            if let Ok(serde_json::Value::Object(fields)) =
+                                                serde_json::to_value(&row)
+                                            {
+                                                if let Some(obj) = payload.as_object_mut() {
+                                                    obj.extend(fields);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    let _ = state.radar_tx.send(payload);
                                 }
                                 if !snapshots.is_empty() {
                                     match state.stores.persist_market_snapshots(&snapshots).await {

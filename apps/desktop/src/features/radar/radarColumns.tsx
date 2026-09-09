@@ -18,6 +18,31 @@ import { quoteSymbol } from "../../lib/units";
 import type { RadarRow } from "../../lib/types";
 import { useUi } from "../../stores/ui";
 
+// Thresholds match Stores::refresh_creator_coordination_risk / creator_coordination's
+// risk_label tiers (ELEVATED >= 0.15, HIGH >= 0.35) so the badge always agrees with what the
+// Creator page and the entry gate itself (OpportunityInput.creator_risk) would say. Read
+// straight off the row — no per-row query. Up to 200 rows can be on screen at once here, and a
+// live coordination lookup per row would be exactly the request-storm pattern fixed elsewhere
+// this session; risk_score rides along on the same batched/streamed row fetch instead.
+function CreatorRiskBadge({ risk }: { risk: number | null | undefined }) {
+  if (risk == null) return null;
+  if (risk >= 0.35) {
+    return (
+      <span className="ml-1 rounded border border-current px-1 text-[10px] text-negative" title={`Repeat early-buyer concentration ${(risk * 100).toFixed(0)}% — standing wallet-ring pattern`}>
+        RING
+      </span>
+    );
+  }
+  if (risk >= 0.15) {
+    return (
+      <span className="ml-1 rounded border border-current px-1 text-[10px] text-amber" title={`Repeat early-buyer concentration ${(risk * 100).toFixed(0)}%`}>
+        OVERLAP
+      </span>
+    );
+  }
+  return null;
+}
+
 function CreatorCell({ row }: { row: RadarRow }) {
   const navigate = useNavigate();
   const select = useUi((s) => s.selectLaunch);
@@ -27,19 +52,22 @@ function CreatorCell({ row }: { row: RadarRow }) {
     return <Unknown reason="creator missing from this radar row" />;
   }
   return (
-    <button
-      type="button"
-      className="font-mono text-label text-info hover:underline"
-      title={creator}
-      onClick={(e) => {
-        e.stopPropagation();
-        select(row.launch_id, row.mint);
-        remember(creator);
-        void navigate({ to: "/creators/$address", params: { address: creator } });
-      }}
-    >
-      {truncatePubkey(creator)}
-    </button>
+    <span className="inline-flex items-center">
+      <button
+        type="button"
+        className="font-mono text-label text-info hover:underline"
+        title={creator}
+        onClick={(e) => {
+          e.stopPropagation();
+          select(row.launch_id, row.mint);
+          remember(creator);
+          void navigate({ to: "/creators/$address", params: { address: creator } });
+        }}
+      >
+        {truncatePubkey(creator)}
+      </button>
+      <CreatorRiskBadge risk={row.creator_risk} />
+    </span>
   );
 }
 

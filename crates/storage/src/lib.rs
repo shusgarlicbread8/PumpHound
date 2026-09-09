@@ -1020,7 +1020,116 @@ impl Stores {
         )
         .execute(&self.postgres)
         .await?;
+        self.refresh_creator_coordination_risk().await?;
+        self.refresh_holder_concentration().await?;
         self.rebuild_cohorts().await?;
+        Ok(())
+    }
+
+    /// Writes `creator_profiles.attributes->'risk_score'`, the field
+    /// `paper_loop::intelligence_indicators` already reads into `OpportunityInput.creator_risk`
+    /// and gates entries against (`maximum_creator_risk` in the autonomous policy) — that gate
+    /// has existed the whole time, it just never had anything writing the number it checks, so
+    /// every creator silently defaulted to "no signal" and the gate could never fire. This is the
+    /// same repeat-early-buyer-concentration analysis the Creator page's coordination panel
+    /// already shows a human (routes.rs::creator_coordination), computed here in one batched pass
+    /// over every creator instead of one HTTP call per creator, and fed back into the actual
+    /// trading decision instead of only ever being read on a page a person opens.
+    ///
+    /// Score is the repeat-buyer concentration fraction directly (repeat early-buyer wallets ÷
+    /// distinct early buyers), already naturally bounded to [0,1] — no extra scaling. Creators
+    /// with fewer than 3 non-quarantined launches are left with no score at all (NULL, not 0)
+    /// rather than a fabricated "safe" default; `intelligence_indicators` already treats a
+    /// missing score as `unwrap_or(1.0)` (maximum caution) on the gating side, so "no evidence"
+    /// correctly reads as "unproven", not as "clean".
+    async fn refresh_creator_coordination_risk(&self) -> Result<(), StorageError> {
+        sqlx::query(
+            r#"WITH creator_launches AS (
+              SELECT creator, mint FROM pumphound.launches
+              WHERE creator <> ''
+                AND COALESCE(attributes->>'integrity_state','') <> 'QUARANTINED'
+            ), ranked AS (
+              SELECT cl.creator, gf.asset_mint AS mint, gf.source_node AS wallet,
+                     row_number() OVER (PARTITION BY gf.asset_mint ORDER BY gf.slot ASC) AS rn
+              FROM pumphound.graph_facts gf
+              JOIN creator_launches cl ON cl.mint = gf.asset_mint
+              WHERE gf.edge_type = 'BOUGHT'
+            ), early AS (
+              SELECT creator, mint, wallet FROM ranked WHERE rn <= 10
+            ), per_creator AS (
+              SELECT creator, count(DISTINCT mint) AS launches, count(DISTINCT wallet) AS distinct_buyers
+              FROM early GROUP BY creator
+            ), repeat_buyers AS (
+              SELECT creator, wallet FROM early
+              GROUP BY creator, wallet
+              HAVING count(DISTINCT mint) >= 2
+            ), repeat_counts AS (
+              SELECT creator, count(*) AS repeat_wallets FROM repeat_buyers GROUP BY creator
+            )
+            UPDATE pumphound.creator_profiles cp
+            SET attributes = attributes || jsonb_build_object(
+                  'risk_score', ROUND(LEAST(1.0, COALESCE(rc.repeat_wallets,0)::numeric / NULLIF(pc.distinct_buyers,0)), 4),
+                  'risk_score_basis', 'repeat_early_buyer_concentration_v1',
+                  'risk_score_launches_examined', pc.launches,
+                  'risk_score_computed_at', now()
+                )
+            FROM per_creator pc
+            LEFT JOIN repeat_counts rc ON rc.creator = pc.creator
+            WHERE cp.creator = pc.creator AND pc.launches >= 3"#,
+        )
+        .execute(&self.postgres)
+        .await?;
+        Ok(())
+    }
+
+    /// Writes `launches.attributes->'holder_top_1_share'`, a field `research::LocalGraphInput`
+    /// has read (and gated `evaluate_local_graph` against, via `GRAPH_TOP1_AVOID`) since before
+    /// this session — like `risk_score` above, the gate existed but nothing computed the number.
+    /// pump.fun's bonding curve mints supply only as buyers pay into the curve (no creator
+    /// premine), so summing BOUGHT minus SOLD atomic amounts per (wallet, mint) from graph_facts
+    /// reconstructs each wallet's net tracked position without needing a balance oracle or a new
+    /// collector decoder. Top-1 share of that tracked total is the classic single-wallet rug/dump
+    /// exposure signal: one wallet holding most of a token's circulating supply can crash price
+    /// unilaterally regardless of how healthy the rest of the holder base looks.
+    ///
+    /// Mints with fewer than 5 tracked net-positive holders are left unscored (NULL) rather than
+    /// given a fabricated share — with 1-2 holders the "top-1 share" is trivially close to 1.0
+    /// and would just be noise, not signal. `holder_concentration_computed_at` is stored
+    /// alongside the score (not relying on a table-level `updated_at`, since `launches` has none)
+    /// so callers evaluating a historical decision can bound the read to what was known as of
+    /// that decision's knowledge cutoff, the same no-lookahead discipline the rest of this
+    /// pipeline already enforces.
+    async fn refresh_holder_concentration(&self) -> Result<(), StorageError> {
+        sqlx::query(
+            r#"WITH net_positions AS (
+              SELECT source_node AS wallet, asset_mint AS mint,
+                     SUM(CASE WHEN edge_type='BOUGHT' THEN amount_atomic ELSE -amount_atomic END) AS net_amount
+              FROM pumphound.graph_facts
+              WHERE edge_type IN ('BOUGHT','SOLD') AND asset_mint IS NOT NULL
+              GROUP BY source_node, asset_mint
+              HAVING SUM(CASE WHEN edge_type='BOUGHT' THEN amount_atomic ELSE -amount_atomic END) > 0
+            ), ranked AS (
+              SELECT mint, wallet, net_amount,
+                     row_number() OVER (PARTITION BY mint ORDER BY net_amount DESC) AS rn,
+                     SUM(net_amount) OVER (PARTITION BY mint) AS tracked_supply,
+                     count(*) OVER (PARTITION BY mint) AS holder_count
+              FROM net_positions
+            ), top1 AS (
+              SELECT mint, net_amount AS top1_amount, tracked_supply, holder_count
+              FROM ranked WHERE rn = 1
+            )
+            UPDATE pumphound.launches l
+            SET attributes = attributes || jsonb_build_object(
+                  'holder_top_1_share', ROUND(LEAST(1.0, top1.top1_amount::numeric / NULLIF(top1.tracked_supply,0)), 4),
+                  'holder_concentration_basis', 'top1_net_tracked_share_v1',
+                  'holder_concentration_holders_tracked', top1.holder_count,
+                  'holder_concentration_computed_at', now()
+                )
+            FROM top1
+            WHERE l.mint = top1.mint AND top1.holder_count >= 5"#,
+        )
+        .execute(&self.postgres)
+        .await?;
         Ok(())
     }
 

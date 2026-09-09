@@ -1,0 +1,23 @@
+<!--
+  ClickHouse's stock default sizes every memory ceiling off the *host's* detected RAM
+  (max_server_memory_usage_to_ram_ratio=0.9, mark_cache_size=5GiB, index_mark_cache_size=5GiB,
+  uncompressed_cache_size=8GiB). On this dev stack ClickHouse shares one Docker Desktop VM
+  (~3.8GiB total, per `docker system info`) with Postgres and NATS, and no per-container cgroup
+  memory limit is set — so ClickHouse alone was free to claim max_server_memory_usage=3.44GiB,
+  leaving essentially nothing for Postgres/NATS/the VM kernel. Observed symptom: swap inside the
+  VM at 1022/1023MiB used and ClickHouse crash-restarting repeatedly (Docker's `unless-stopped`
+  caught each one) — consistent with the Linux OOM killer, not ClickHouse's own graceful
+  "memory limit exceeded" query rejection, since that only guards ClickHouse's own ceiling and
+  has no idea Postgres/NATS need headroom too.
+  These caps leave real headroom for the other two containers plus VM/kernel overhead:
+    max_server_memory_usage 2GiB, mark/index_mark caches 256MiB each, uncompressed cache off
+    (this workload is insert/scan heavy, not repeated-point-read heavy, so the 8GiB default cache
+    buys little and costs a lot on a memory-constrained box).
+  Raise these back up (or delete this file) once ClickHouse gets a dedicated host/VM.
+-->
+<clickhouse>
+  <max_server_memory_usage>2147483648</max_server_memory_usage>
+  <mark_cache_size>268435456</mark_cache_size>
+  <index_mark_cache_size>268435456</index_mark_cache_size>
+  <uncompressed_cache_size>0</uncompressed_cache_size>
+</clickhouse>
