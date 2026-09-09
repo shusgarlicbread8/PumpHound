@@ -20,6 +20,8 @@ pub struct RecoverableOrder {
     pub arrival_deadline_at: DateTime<Utc>,
     pub request: PaperOrderRequest,
     pub arrival_quote: Option<PaperQuote>,
+    /// Full order payload; `payload.execution_twin` marks an Execution Twin order.
+    pub payload: Value,
 }
 
 pub async fn seed(stores: &Stores) -> anyhow::Result<()> {
@@ -1033,12 +1035,50 @@ pub async fn latest_launch_investigation(
     }))
 }
 
+/// Execution Twin extras attached to an order at queue time. The frozen twin payload lives in
+/// `paper_orders.payload.execution_twin` so settlement and replay use exactly the decision inputs.
+pub struct TwinQueue {
+    pub trace_id: Uuid,
+    pub intent_id: Uuid,
+    pub simulator_version: &'static str,
+    pub payload: Value,
+}
+
+/// Twin fill extras: network lamports actually charged and, for buys, the exact quote the
+/// arrival-state swap consumed (may be below the reserved budget).
+pub struct TwinFill {
+    pub result_id: Uuid,
+    pub simulator_version: &'static str,
+    pub network_cost_lamports: u64,
+    pub quote_mint: String,
+    pub input_override: Option<u128>,
+}
+
 pub async fn queue_order(
     stores: &Stores,
     req: &PaperOrderRequest,
     decision_quote: &PaperQuote,
     arrival_delay_ms: u64,
     maximum_arrival_wait_ms: u64,
+) -> anyhow::Result<Uuid> {
+    queue_order_with(
+        stores,
+        req,
+        decision_quote,
+        arrival_delay_ms,
+        maximum_arrival_wait_ms,
+        None,
+    )
+    .await
+}
+
+pub async fn queue_order_with(
+    stores: &Stores,
+    req: &PaperOrderRequest,
+    decision_quote: &PaperQuote,
+    arrival_delay_ms: u64,
+    maximum_arrival_wait_ms: u64,
+    twin: Option<TwinQueue>,
 ) -> anyhow::Result<Uuid> {
     let request_key = format!("{}:{}", req.portfolio_id, req.client_request_id);
     let mut tx = stores.postgres.begin().await?;
@@ -1097,13 +1137,27 @@ pub async fn queue_order(
         + chrono::Duration::milliseconds(
             i64::try_from(maximum_arrival_wait_ms).unwrap_or(i64::MAX),
         );
+    let mut payload = json!({
+        "request": req,
+        "decision_quote": decision_quote,
+        "paper": true,
+        "live_money": false
+    });
+    let (trace_id, intent_id, simulator_version) = match &twin {
+        Some(t) => {
+            payload["execution_twin"] = t.payload.clone();
+            (Some(t.trace_id), Some(t.intent_id), t.simulator_version)
+        }
+        None => (None, None, pumphound_paper_core::SIMULATOR_LEGACY),
+    };
     sqlx::query(
         r#"INSERT INTO pumphound.paper_orders
            (order_id,client_request_id,request_key,portfolio_id,simulation_run_id,decision_id,
             quote_id,market,side,input_mint,input_atomic,output_mint,minimum_output_atomic,status,
-            accepted_at,arrival_at,arrival_deadline_at,decision_snapshot_id,payload)
+            accepted_at,arrival_at,arrival_deadline_at,decision_snapshot_id,payload,
+            trace_id,intent_id,simulator_version)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::numeric,$12,$13::numeric,'DECIDED',
-                   now(),$14,$15,$16,$17)"#,
+                   now(),$14,$15,$16,$17,$18,$19,$20)"#,
     )
     .bind(order_id)
     .bind(req.client_request_id)
@@ -1121,15 +1175,21 @@ pub async fn queue_order(
     .bind(arrival_at)
     .bind(arrival_deadline_at)
     .bind(&decision_quote.market_snapshot_id)
-    .bind(json!({
-        "request": req,
-        "decision_quote": decision_quote,
-        "paper": true,
-        "live_money": false
-    }))
+    .bind(payload)
+    .bind(trace_id)
+    .bind(intent_id)
+    .bind(simulator_version)
     .execute(&mut *tx)
     .await?;
-    order_event(&mut tx, order_id, 0, "DECIDED", None, json!({})).await?;
+    order_event(
+        &mut tx,
+        order_id,
+        0,
+        "DECIDED",
+        None,
+        json!({"simulator_version": simulator_version, "trace_id": trace_id}),
+    )
+    .await?;
     sqlx::query(
         r#"INSERT INTO pumphound.paper_reservations
            (reservation_id,portfolio_id,simulation_run_id,order_id,asset_mint,amount_atomic,created_at)
@@ -1245,6 +1305,7 @@ pub async fn recoverable_orders(stores: &Stores) -> anyhow::Result<Vec<Recoverab
             arrival_deadline_at: row.get("arrival_deadline_at"),
             request,
             arrival_quote,
+            payload,
         });
     }
     Ok(orders)
@@ -1293,6 +1354,40 @@ pub async fn record_arrival(
 }
 
 pub async fn reject_order(stores: &Stores, order_id: Uuid, reason: &str) -> anyhow::Result<()> {
+    reject_order_with_fee(stores, order_id, reason, 0, "").await
+}
+
+/// Whether the portfolio's active run currently holds any of `mint` (used to decide whether a
+/// simulated buy must create the synthetic identity's ATA and pay rent).
+pub async fn portfolio_holds_mint(
+    stores: &Stores,
+    portfolio_id: Uuid,
+    mint: &str,
+) -> anyhow::Result<bool> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        r#"SELECT EXISTS (
+             SELECT 1 FROM pumphound.paper_positions p
+             JOIN pumphound.simulation_runs r ON r.simulation_run_id=p.simulation_run_id
+             WHERE p.portfolio_id=$1 AND r.state='running' AND p.base_mint=$2
+               AND p.status IN ('OPEN','UNMARKABLE','CLOSED')
+           )"#,
+    )
+    .bind(portfolio_id)
+    .bind(mint)
+    .fetch_one(&stores.postgres)
+    .await?)
+}
+
+/// Reject an order and, when the simulated transaction landed but failed, charge the Solana fees
+/// that were still paid (`network_cost_lamports` > 0). Never touches token balances: a failed swap
+/// produces no output.
+pub async fn reject_order_with_fee(
+    stores: &Stores,
+    order_id: Uuid,
+    reason: &str,
+    network_cost_lamports: u64,
+    quote_mint: &str,
+) -> anyhow::Result<()> {
     let mut tx = stores.postgres.begin().await?;
     let row = sqlx::query("SELECT status FROM pumphound.paper_orders WHERE order_id=$1 FOR UPDATE")
         .bind(order_id)
@@ -1314,13 +1409,36 @@ pub async fn reject_order(stores: &Stores, order_id: Uuid, reason: &str) -> anyh
     .execute(&mut *tx)
     .await?;
     release_reservation(&mut tx, order_id, reason).await?;
+    if network_cost_lamports > 0 {
+        let scope = sqlx::query(
+            "SELECT portfolio_id,simulation_run_id FROM pumphound.paper_orders WHERE order_id=$1",
+        )
+        .bind(order_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        fee_movement(
+            &mut tx,
+            scope.get("portfolio_id"),
+            scope.get("simulation_run_id"),
+            None,
+            order_id,
+            quote_mint,
+            network_cost_lamports,
+            format!("network-fee-failed-{order_id}"),
+            json!({"reason": reason, "charged_on_failure": true}),
+        )
+        .await?;
+    }
     order_event(
         &mut tx,
         order_id,
         sequence,
         "REJECTED",
         Some(reason),
-        json!({"reservation_released": true}),
+        json!({
+            "reservation_released": true,
+            "network_cost_charged_lamports": network_cost_lamports
+        }),
     )
     .await?;
     tx.commit().await?;
@@ -1331,6 +1449,15 @@ pub async fn settle_arrived(
     stores: &Stores,
     order_id: Uuid,
     arrival_slot: i64,
+) -> anyhow::Result<()> {
+    settle_arrived_with(stores, order_id, arrival_slot, None).await
+}
+
+pub async fn settle_arrived_with(
+    stores: &Stores,
+    order_id: Uuid,
+    arrival_slot: i64,
+    twin: Option<TwinFill>,
 ) -> anyhow::Result<()> {
     let mut tx = stores.postgres.begin().await?;
     let row = sqlx::query(
@@ -1364,9 +1491,18 @@ pub async fn settle_arrived(
     let launch_id: Uuid = row.get("launch_id");
     let order_side: String = row.get("side");
     let input_mint: String = row.get("input_mint");
-    let input_atomic = parse_u128(row.get::<String, _>("input_atomic").as_str());
+    let reserved_input_atomic = parse_u128(row.get::<String, _>("input_atomic").as_str());
+    let input_atomic = twin
+        .as_ref()
+        .and_then(|t| t.input_override)
+        .filter(|v| *v <= reserved_input_atomic)
+        .unwrap_or(reserved_input_atomic);
     let output_mint: String = row.get("output_mint");
     let output_atomic = quote.expected_output.atomic.0;
+    let (result_id, simulator_version, network_cost_lamports) = match &twin {
+        Some(t) => (Some(t.result_id), t.simulator_version, t.network_cost_lamports),
+        None => (None, pumphound_paper_core::SIMULATOR_LEGACY, 0),
+    };
     let market: String = row.get("market");
     let snapshot_id: String = row
         .try_get::<Option<String>, _>("arrival_snapshot_id")?
@@ -1379,8 +1515,10 @@ pub async fn settle_arrived(
     let inserted = sqlx::query(
         r#"INSERT INTO pumphound.paper_fills
            (fill_id,order_id,simulation_run_id,arrival_slot,arrival_at,input_mint,input_atomic,
-            output_mint,output_atomic,market_snapshot_id,canonicality,fee_components)
-           VALUES ($1,$2,$3,$4,now(),$5,$6::numeric,$7,$8::numeric,$9,'provisional',$10)
+            output_mint,output_atomic,market_snapshot_id,canonicality,fee_components,
+            result_id,network_cost_lamports,simulator_version)
+           VALUES ($1,$2,$3,$4,now(),$5,$6::numeric,$7,$8::numeric,$9,'provisional',$10,
+                   $11,$12::numeric,$13)
            ON CONFLICT (order_id,simulation_run_id) DO NOTHING"#,
     )
     .bind(fill_id)
@@ -1393,6 +1531,9 @@ pub async fn settle_arrived(
     .bind(output_atomic.to_string())
     .bind(&snapshot_id)
     .bind(serde_json::to_value(&quote.fee_components)?)
+    .bind(result_id)
+    .bind(network_cost_lamports.to_string())
+    .bind(simulator_version)
     .execute(&mut *tx)
     .await?
     .rows_affected();
@@ -1424,6 +1565,32 @@ pub async fn settle_arrived(
         format!("trade-output-{order_id}"),
     )
     .await?;
+    // Solana-side costs (base + priority + modeled tip + rent) leave the quote balance as a
+    // separate `fee` movement so attribution can split protocol fees from network drag.
+    let quote_mint_for_fee = twin
+        .as_ref()
+        .map(|t| t.quote_mint.clone())
+        .unwrap_or_default();
+    if network_cost_lamports > 0 && !quote_mint_for_fee.is_empty() {
+        fee_movement(
+            &mut tx,
+            portfolio_id,
+            run_id,
+            Some(fill_id),
+            order_id,
+            &quote_mint_for_fee,
+            network_cost_lamports,
+            format!("network-fee-{order_id}"),
+            json!({"result_id": result_id, "simulator_version": simulator_version}),
+        )
+        .await?;
+    }
+    // Post-cost basis: a twin buy's lot carries the network lamports it paid to exist.
+    let lot_cost_atomic = if order_side == "buy" {
+        input_atomic.saturating_add(network_cost_lamports as u128)
+    } else {
+        input_atomic
+    };
     if order_side == "buy" {
         let lot_id = Uuid::now_v7();
         sqlx::query(
@@ -1439,7 +1606,7 @@ pub async fn settle_arrived(
         .bind(&output_mint)
         .bind(output_atomic.to_string())
         .bind(&input_mint)
-        .bind(input_atomic.to_string())
+        .bind(lot_cost_atomic.to_string())
         .execute(&mut *tx)
         .await?;
         sqlx::query(
@@ -1460,7 +1627,7 @@ pub async fn settle_arrived(
         .bind(&output_mint)
         .bind(&input_mint)
         .bind(output_atomic.to_string())
-        .bind(input_atomic.to_string())
+        .bind(lot_cost_atomic.to_string())
         .execute(&mut *tx)
         .await?;
     } else {
@@ -1470,7 +1637,7 @@ pub async fn settle_arrived(
             run_id,
             &input_mint,
             input_atomic,
-            output_atomic,
+            output_atomic.saturating_sub(network_cost_lamports as u128),
             fill_id,
             decision_id,
         )
@@ -1534,7 +1701,10 @@ pub async fn settle_arrived(
     .bind(lifecycle_state)
     .bind(json!({"fill_id": fill_id, "order_id": order_id}))
     .bind(decision_id)
-    .bind(pumphound_paper_core::ADAPTIVE_EXPERIMENT_ID)
+    .bind(match &twin {
+        Some(_) => pumphound_paper_core::EXECUTION_EDGE_EXPERIMENT_ID,
+        None => pumphound_paper_core::ADAPTIVE_EXPERIMENT_ID,
+    })
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -1956,8 +2126,25 @@ pub async fn ledger_items(stores: &Stores, portfolio_id: Uuid) -> anyhow::Result
     }))
 }
 
+/// Strategy reports are rebuilt from the ledger (several queries per book, ~4–15 s under load)
+/// and polled by Home, Strategies and `/paper/strategies`. Concurrent callers coalesce onto one
+/// computation and share it for a short window; every report carries its own `generated_at`,
+/// so nothing is hidden by the cache.
+const STRATEGY_REPORTS_TTL: std::time::Duration = std::time::Duration::from_secs(15);
+
 pub async fn strategy_reports(stores: &Stores) -> anyhow::Result<Value> {
-    crate::ledger_metrics::strategy_reports(stores).await
+    static CACHE: std::sync::OnceLock<tokio::sync::Mutex<Option<(std::time::Instant, Value)>>> =
+        std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| tokio::sync::Mutex::new(None));
+    let mut guard = cache.lock().await;
+    if let Some((at, value)) = guard.as_ref() {
+        if at.elapsed() < STRATEGY_REPORTS_TTL {
+            return Ok(value.clone());
+        }
+    }
+    let value = crate::ledger_metrics::strategy_reports(stores).await?;
+    *guard = Some((std::time::Instant::now(), value.clone()));
+    Ok(value)
 }
 
 pub async fn experiment_funnel(stores: &Stores) -> anyhow::Result<Value> {
@@ -2238,6 +2425,39 @@ async fn movement(
     .bind(signed_atomic)
     .bind(category)
     .bind(key)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn fee_movement(
+    tx: &mut Transaction<'_, Postgres>,
+    portfolio_id: Uuid,
+    run_id: Uuid,
+    fill_id: Option<Uuid>,
+    order_id: Uuid,
+    mint: &str,
+    lamports: u64,
+    key: String,
+    metadata: Value,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"INSERT INTO pumphound.ledger_movements
+           (movement_id,portfolio_id,simulation_run_id,fill_id,order_id,asset_mint,
+            signed_atomic,category,at_time,idempotency_key,metadata)
+           VALUES ($1,$2,$3,$4,$5,$6,$7::numeric,'fee',now(),$8,$9)
+           ON CONFLICT (idempotency_key) DO NOTHING"#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(portfolio_id)
+    .bind(run_id)
+    .bind(fill_id)
+    .bind(order_id)
+    .bind(mint)
+    .bind(format!("-{lamports}"))
+    .bind(key)
+    .bind(metadata)
     .execute(&mut **tx)
     .await?;
     Ok(())

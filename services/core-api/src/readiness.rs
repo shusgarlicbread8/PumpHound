@@ -2,9 +2,50 @@ use crate::state::AppState;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashSet;
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 pub const STALE_MARKET_MS: i64 = 20_000;
+
+/// The quarantine queries below scan the whole `canonical_event_revisions` table (hundreds of
+/// thousands of rows). They are polled by the desktop, `/health`, the cockpit and every paper
+/// scan; without a cache they were ~85 full scans/minute and kept ClickHouse at >250% CPU on
+/// the shared Docker VM, starving Postgres. Evidence is 15-minute windows, so a 10 s cache
+/// changes nothing material.
+const QUARANTINE_CACHE_TTL: Duration = Duration::from_secs(10);
+
+struct Cached<T> {
+    at: Instant,
+    value: T,
+}
+
+fn cached<T: Clone>(slot: &Mutex<Option<Cached<T>>>) -> Option<T> {
+    let guard = slot.lock().ok()?;
+    let entry = guard.as_ref()?;
+    (entry.at.elapsed() < QUARANTINE_CACHE_TTL).then(|| entry.value.clone())
+}
+
+fn store<T>(slot: &Mutex<Option<Cached<T>>>, value: &T)
+where
+    T: Clone,
+{
+    if let Ok(mut guard) = slot.lock() {
+        *guard = Some(Cached {
+            at: Instant::now(),
+            value: value.clone(),
+        });
+    }
+}
+
+fn impact_cache() -> &'static Mutex<Option<Cached<QuarantineImpact>>> {
+    static CACHE: OnceLock<Mutex<Option<Cached<QuarantineImpact>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn health_cache() -> &'static Mutex<Option<Cached<Value>>> {
+    static CACHE: OnceLock<Mutex<Option<Cached<Value>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
 
 pub fn idle_ms(
     last_event_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -276,7 +317,7 @@ struct QuarantineEvidence {
     recent_total: u64,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct QuarantineImpact {
     evidence_available: bool,
     hot_markets: HashSet<String>,
@@ -287,6 +328,17 @@ struct QuarantineImpact {
 }
 
 async fn quarantine_impact(state: &AppState) -> QuarantineImpact {
+    if let Some(hit) = cached(impact_cache()) {
+        return hit;
+    }
+    let impact = quarantine_impact_uncached(state).await;
+    if impact.evidence_available {
+        store(impact_cache(), &impact);
+    }
+    impact
+}
+
+async fn quarantine_impact_uncached(state: &AppState) -> QuarantineImpact {
     let aliases = match state.stores.load_hot_mints().await {
         Ok(aliases) => aliases.into_iter().collect::<HashSet<_>>(),
         Err(_) => return QuarantineImpact::default(),
@@ -406,6 +458,17 @@ fn is_known_non_market_discriminator(discriminator: &str) -> bool {
 }
 
 pub async fn quarantine_health(state: &AppState) -> Value {
+    if let Some(hit) = cached(health_cache()) {
+        return hit;
+    }
+    let value = quarantine_health_uncached(state).await;
+    if value.get("state").and_then(Value::as_str) != Some("UNAVAILABLE") {
+        store(health_cache(), &value);
+    }
+    value
+}
+
+async fn quarantine_health_uncached(state: &AppState) -> Value {
     let counts = state
         .stores
         .clickhouse

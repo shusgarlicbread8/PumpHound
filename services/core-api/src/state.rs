@@ -26,6 +26,9 @@ pub struct AppState {
     pub settings: Arc<RwLock<serde_json::Value>>,
     pub health: Arc<RwLock<HealthBits>>,
     pub tape: Arc<RwLock<HashMap<String, Vec<TapeTrade>>>>,
+    /// Latest fee-oracle observation (priority fee percentiles + Jito tip floor). `None` until the
+    /// poller has run; consumers fall back to a labelled static environment.
+    pub fee_env: Arc<RwLock<Option<pumphound_execution_twin::network::FeeEnvironment>>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -138,6 +141,7 @@ impl AppState {
                 ..Default::default()
             })),
             tape: Arc::new(RwLock::new(HashMap::new())),
+            fee_env: Arc::new(RwLock::new(None)),
         }
     }
 

@@ -646,6 +646,11 @@ export interface PortfolioSnapshotPosition {
   realized_pnl_quote_atomic?: ReportValue;
   unrealized_pnl_quote_atomic?: ReportValue;
   executable_exit_quote_atomic?: ReportValue;
+  theoretical_mark_quote_atomic?: ReportValue;
+  liquidation_impact_bps?: ReportValue;
+  liquidation_cost_quote_atomic?: ReportValue;
+  mark_status?: string | null;
+  mark_simulator_version?: string | null;
   opened_at?: Timestamp | null;
   closed_at?: Timestamp | null;
   entry_reason?: string | null;

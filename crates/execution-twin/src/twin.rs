@@ -630,6 +630,53 @@ mod tests {
         assert!(found, "prior must produce some landing timeouts");
     }
 
+    /// Replay contract: the paper loop stores intent/identity/snapshots/config/fee_env as JSON;
+    /// replay deserializes them and must reproduce the original fingerprint byte-for-byte.
+    #[test]
+    fn replay_from_serialized_inputs_reproduces_fingerprint() {
+        let decision = curve_snapshot("d", 100, 30_000_000_000, 1_073_000_000_000_000);
+        let arrival = curve_snapshot("a", 101, 30_400_000_000, 1_060_000_000_000_000);
+        let v = first_landing_seed(TradeSide::Buy, &decision);
+        let it = intent(TradeSide::Buy, &decision, v);
+        let id = identity(&decision);
+        let env = FeeEnvironment::fallback(Utc::now());
+        let cfg = TwinConfig::default();
+        let live = execute(ExecutionInputs {
+            intent: &it,
+            identity: &id,
+            decision_snapshot: &decision,
+            arrival_snapshot: Some(&arrival),
+            fee_env: &env,
+            config: &cfg,
+            user_ata_exists: false,
+        });
+        let stored = json!({
+            "intent": it, "identity": id, "decision": decision, "arrival": arrival,
+            "fee_env": env, "config": cfg
+        });
+        let text = stored.to_string();
+        let back: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let it2: ExecutionIntent = serde_json::from_value(back["intent"].clone()).unwrap();
+        let id2: MarketIdentity = serde_json::from_value(back["identity"].clone()).unwrap();
+        let d2: MarketSnapshot = serde_json::from_value(back["decision"].clone()).unwrap();
+        let a2: MarketSnapshot = serde_json::from_value(back["arrival"].clone()).unwrap();
+        let env2: FeeEnvironment = serde_json::from_value(back["fee_env"].clone()).unwrap();
+        let cfg2: TwinConfig = serde_json::from_value(back["config"].clone()).unwrap();
+        let replayed = execute(ExecutionInputs {
+            intent: &it2,
+            identity: &id2,
+            decision_snapshot: &d2,
+            arrival_snapshot: Some(&a2),
+            fee_env: &env2,
+            config: &cfg2,
+            user_ata_exists: false,
+        });
+        assert!(live.success, "{:?}", live.failure_detail);
+        assert_eq!(result_fingerprint(&live), result_fingerprint(&replayed));
+        assert_eq!(live.filled_base, replayed.filled_base);
+        assert_eq!(live.transaction_sha256, replayed.transaction_sha256);
+    }
+
     #[test]
     fn results_are_deterministic_for_same_inputs() {
         let decision = curve_snapshot("d", 100, 40_000_000_000, 1_000_000_000_000_000);

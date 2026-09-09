@@ -338,6 +338,64 @@ pub async fn strategy_reports(stores: &Stores) -> anyhow::Result<Value> {
         } else {
             "UNKNOWN"
         };
+        let tail = pumphound_paper_core::tail_metrics(&closed_pnls);
+        let simulator_version = manifest
+            .get("simulator_version")
+            .and_then(Value::as_str)
+            .unwrap_or(pumphound_paper_core::SIMULATOR_LEGACY)
+            .to_string();
+        let execution_twin_book = simulator_version != pumphound_paper_core::SIMULATOR_LEGACY;
+        // Execution-twin books: attempts/fills/failures and network drag come from execution_results.
+        let execution = if execution_twin_book {
+            let row = sqlx::query(
+                r#"SELECT COUNT(*)::bigint AS attempts,
+                          COUNT(*) FILTER (WHERE r.success)::bigint AS fills,
+                          COALESCE(SUM(r.network_cost_charged_lamports),0)::text AS network_cost_lamports,
+                          COALESCE(SUM(r.network_cost_charged_lamports) FILTER (WHERE NOT r.success),0)::text AS failed_attempt_cost_lamports,
+                          COALESCE(SUM(r.protocol_fee_quote+r.creator_fee_quote+r.lp_fee_quote+r.cashback_fee_quote) FILTER (WHERE r.success),0)::text AS protocol_fees_quote,
+                          percentile_cont(0.5) WITHIN GROUP (ORDER BY r.landing_slots) FILTER (WHERE r.success) AS median_landing_slots,
+                          percentile_cont(0.5) WITHIN GROUP (ORDER BY r.price_impact_bps) FILTER (WHERE r.success) AS median_impact_bps,
+                          percentile_cont(0.5) WITHIN GROUP (ORDER BY r.adverse_move_bps) FILTER (WHERE r.success) AS median_adverse_bps
+                   FROM pumphound.execution_results r
+                   JOIN pumphound.execution_intents i ON i.intent_id=r.intent_id
+                   WHERE i.simulation_run_id=$1"#,
+            )
+            .bind(id)
+            .fetch_one(&stores.postgres)
+            .await?;
+            let attempts: i64 = row.get("attempts");
+            let fills: i64 = row.get("fills");
+            let network: i128 = row.get::<String, _>("network_cost_lamports").parse().unwrap_or(0);
+            let failed_cost: i128 = row
+                .get::<String, _>("failed_attempt_cost_lamports")
+                .parse()
+                .unwrap_or(0);
+            let protocol: i128 = row.get::<String, _>("protocol_fees_quote").parse().unwrap_or(0);
+            json!({
+                "simulator_version": simulator_version,
+                "fidelity": "EXECUTION_TWIN_V1",
+                "attempts": attempts,
+                "fills": fills,
+                "failures": attempts - fills,
+                "fill_rate": (attempts > 0).then(|| fills as f64 / attempts as f64),
+                "network_cost_lamports": network.to_string(),
+                "network_cost_sol": sol(network),
+                "failed_attempt_cost_lamports": failed_cost.to_string(),
+                "failed_attempt_cost_sol": sol(failed_cost),
+                "protocol_fees_quote_atomic": protocol.to_string(),
+                "protocol_fees_sol": sol(protocol),
+                "median_landing_slots": row.get::<Option<f64>, _>("median_landing_slots"),
+                "median_price_impact_bps": row.get::<Option<f64>, _>("median_impact_bps"),
+                "median_adverse_move_bps": row.get::<Option<f64>, _>("median_adverse_bps"),
+                "execution_drag_sol_per_fill": (fills > 0).then(|| sol(network + protocol) / fills as f64)
+            })
+        } else {
+            json!({
+                "simulator_version": simulator_version,
+                "fidelity": "LEGACY_SIMULATOR",
+                "note": "fixed 1s arrival, every quoted order fills, no network/priority/tip cost, flat legacy fee schedule"
+            })
+        };
         let authority = if strategy.contains("CONTROL_FLOW") || strategy.contains("RANDOM_CONTROL")
         {
             "CONTROL"
@@ -349,7 +407,7 @@ pub async fn strategy_reports(stores: &Stores) -> anyhow::Result<Value> {
         let caveats = vec![
             "Observed paper results do not establish alpha or out-of-sample significance.",
             "Book comparisons differ in sizing, capacity, selection and exit policy; no incremental-lift claim.",
-            "Protocol/creator fees are embedded in fill prices. Network/priority fees are not modeled; slippage/impact are embedded, not separately attributable.",
+            if execution_twin_book { "Execution Twin book: protocol/creator/LP/cashback fees, base+priority fees, modeled tip and rent are charged explicitly (see `execution`); impact and adverse selection are recorded per fill in execution_results." } else { "Legacy simulator book: protocol/creator fees are embedded in fill prices. Network/priority fees are not modeled; slippage/impact are embedded, not separately attributable." },
             "Native SOL fee sentinel is normalized to SOL; historical schedule label says 125bps but quote implementation applies 95+100bps. Historical records are unchanged.",
             "Fee allocation uses FIFO realized-cost/proceeds shares, rounded down per allocation. Gross excludes modeled protocol/creator fees only.",
             "Closed N and expectancy use fully FIFO-consumed acquisition lots (one entry fill lot per realized trade). Open positions remain aggregate book/mint holdings.",
@@ -374,6 +432,27 @@ pub async fn strategy_reports(stores: &Stores) -> anyhow::Result<Value> {
           "closed_trade_basis":"FULLY_FIFO_CONSUMED_ENTRY_LOT",
           "money":{"net_pnl":sol_money(net),"gross_pnl":fees_known.then(||sol_money(net+fees)),"fees":fees_known.then(||sol_money(fees)),"max_drawdown":sol_money(drawdown),"exposure":sol_money(exposure)},
           "attribution":{"position_net_quote_atomic":net.to_string(),"fifo_net_quote_atomic":lot_net.to_string(),"reconciled":net==lot_net,"difference_quote_atomic":(net-lot_net).to_string(),"fee_status":if fees_known {"ALLOCATED_MODELED_FEES"}else{"UNKNOWN_ASSET_OR_COMPONENT"},"excluded_non_sol_positions":non_sol},
+          "tail":{
+            "n":tail.n,
+            "net_pnl":sol(tail.net_pnl_atomic),
+            "net_ex_largest_winner":sol(tail.net_ex_largest_winner_atomic),
+            "net_ex_top5_winners":sol(tail.net_ex_top5_winners_atomic),
+            "net_ex_top_1pct_winners":sol(tail.net_ex_top_1pct_winners_atomic),
+            "net_bottom_50pct":sol(tail.net_bottom_50pct_atomic),
+            "net_top_10pct":sol(tail.net_top_10pct_atomic),
+            "top1_share_of_profit":tail.top1_share_of_profit,
+            "top5_share_of_profit":tail.top5_share_of_profit,
+            "top10_share_of_profit":tail.top10_share_of_profit,
+            "top_1pct_share_of_profit":tail.top_1pct_share_of_profit,
+            "profit_factor":tail.profit_factor,
+            "mean_pnl":tail.mean_pnl_atomic.map(|v|v/1e9),
+            "median_pnl":tail.median_pnl_atomic.map(|v|v/1e9),
+            "downside_deviation":tail.downside_deviation_atomic.map(|v|v/1e9),
+            "sortino_like":tail.sortino_like,
+            "headline_depends_on_largest_winner":tail.headline_depends_on_largest_winner,
+            "return_over_drawdown":(drawdown>0).then(||closed_net as f64/drawdown as f64)
+          },
+          "execution":execution,"simulator_version":simulator_version,
           "position_sizing":manifest.get("position_sizing"),"fee_model_version":manifest.get("fee_model_version"),"audit_caveats":caveats,
           "sample_warning":(closed<100).then(||format!("{}; N={closed}",sample_status(closed))),"experiment_id":manifest.get("experiment_id"),"fabricated":false
         });
@@ -387,6 +466,10 @@ pub async fn strategy_reports(stores: &Stores) -> anyhow::Result<Value> {
           "generated_at":Utc::now(),"report_sha256":pumphound_domain::sha256_hex(report.to_string().as_bytes()),
           "period_start":positions.iter().map(|p|p.get::<DateTime<Utc>,_>("opened_at")).min(),
           "period_end":positions.iter().filter_map(|p|p.get::<Option<DateTime<Utc>>,_>("closed_at")).max(),
+          "simulator_version":report["simulator_version"],"execution_fidelity":report["execution"]["fidelity"],
+          "net_ex_largest_winner":report["tail"]["net_ex_largest_winner"],"net_ex_top_1pct_winners":report["tail"]["net_ex_top_1pct_winners"],
+          "top1_share_of_profit":report["tail"]["top1_share_of_profit"],"headline_depends_on_largest_winner":report["tail"]["headline_depends_on_largest_winner"],
+          "fill_rate":report["execution"]["fill_rate"],"execution_drag_sol_per_fill":report["execution"]["execution_drag_sol_per_fill"],
           "closed_trades":closed,"open_positions":open,"trades":orders_n,"net_pnl":report["net_pnl"],"expectancy":report["expectancy"],"max_drawdown":report["max_drawdown"],"win_rate":report["win_rate"],"status":report["status"],
           "sample_status":report["sample_status"],"edge_status":report["edge_status"],"authority":authority,"financial_units":report["financial_units"],"report":report}));
     }

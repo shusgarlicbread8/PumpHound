@@ -3,6 +3,17 @@ name: pumphound
 services:
   postgres:
     image: postgres:17-alpine
+    # Working set (decisions ~900 MB, archive indexes) far exceeds the 128 MB default; observed
+    # multi-second DataFileRead waits stalled the collector and paper loop. Docker VM is 3.8 GB
+    # shared with ClickHouse (capped in db/clickhouse/config.d/memory.xml).
+    # synchronous_commit=off: the volume lives on an external APFS sparsebundle where fsync is
+    # ~175x slower than local disk, and the collector issues several commits per transaction.
+    # Off trades <=~600 ms of committed rows on a crash (never corruption) for throughput; the
+    # NDJSON journal under PUMPHOUND_DATA_DIR remains the evidence of record and is replayable.
+    command: >-
+      postgres -c shared_buffers=768MB -c effective_cache_size=2GB -c work_mem=16MB
+      -c maintenance_work_mem=128MB -c random_page_cost=1.1
+      -c synchronous_commit=off -c wal_writer_delay=200ms
     environment:
       POSTGRES_USER: pumphound
       POSTGRES_PASSWORD: pumphound
@@ -27,6 +38,8 @@ services:
       - ./db/postgres/014_position_quarantine_propagation.sql:/docker-entrypoint-initdb.d/014_position_quarantine_propagation.sql:ro
       - ./db/postgres/015_intelligence_refresh_indexes.sql:/docker-entrypoint-initdb.d/015_intelligence_refresh_indexes.sql:ro
       - ./db/postgres/016_pending_research_intent_index.sql:/docker-entrypoint-initdb.d/016_pending_research_intent_index.sql:ro
+      - ./db/postgres/017_execution_twin.sql:/docker-entrypoint-initdb.d/017_execution_twin.sql:ro
+      - ./db/postgres/018_paper_loop_hot_path_indexes.sql:/docker-entrypoint-initdb.d/018_paper_loop_hot_path_indexes.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U pumphound -d pumphound"]
       interval: 3s

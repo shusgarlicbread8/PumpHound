@@ -185,7 +185,10 @@ pub async fn report(stores: &Stores, q: &TruthQuery) -> anyhow::Result<Value> {
     };
     let state = canonical_state(q.state.as_deref());
     let empty = json!([]);
-    let positions:Value=if q.summary_only { empty.clone() } else { sqlx::query_scalar(r#"SELECT COALESCE(jsonb_agg(v ORDER BY v->>'opened_at' DESC),'[]') FROM (
+    let positions: Value = if q.summary_only {
+        empty.clone()
+    } else {
+        sqlx::query_scalar(r#"SELECT COALESCE(jsonb_agg(v ORDER BY v->>'opened_at' DESC),'[]') FROM (
       SELECT to_jsonb(pos)||jsonb_build_object('trade_trace_id',pos.position_id,'book_id',pos.simulation_run_id,
        'experiment_id',r.manifest->>'experiment_id','strategy_version',r.manifest->>'strategy',
        'policy_version',COALESCE(entry.policy_version,r.manifest->>'policy_version'),
@@ -236,7 +239,8 @@ pub async fn report(stores: &Stores, q: &TruthQuery) -> anyhow::Result<Value> {
         AND d.decision_kind='EXIT' ORDER BY d.decision_at DESC LIMIT 1) mark ON true
       WHERE pos.simulation_run_id=ANY($1) AND ($2::text IS NULL OR pos.status=$2 OR ($2='OPEN' AND pos.status='UNMARKABLE'))
        AND ($3::timestamptz IS NULL OR COALESCE(pos.closed_at,pos.opened_at)>=$3)) rows"#)
-      .bind(&ids).bind(state.as_deref()).bind(since).fetch_one(&mut *tx).await?};
+      .bind(&ids).bind(state.as_deref()).bind(since).fetch_one(&mut *tx).await?
+    };
     let summary:Value=sqlx::query_scalar(r#"WITH selected AS (
        SELECT pos.* FROM pumphound.paper_positions pos
        WHERE simulation_run_id=ANY($1) AND ($2::text IS NULL OR status=$2 OR ($2='OPEN' AND status='UNMARKABLE'))
@@ -295,7 +299,10 @@ pub async fn report(stores: &Stores, q: &TruthQuery) -> anyhow::Result<Value> {
        'capital','SIMULATED','unrealized_pnl',null,'unrealized_pnl_state','UNKNOWN',
        'unrealized_pnl_reason','Current executable marks are not persisted for every holding')"#)
       .bind(&ids).bind(state.as_deref()).bind(since).bind(pumphound_domain::WSOL_MINT).fetch_one(&mut *tx).await?;
-    let orders:Value=if q.summary_only { empty.clone() } else { sqlx::query_scalar(r#"SELECT COALESCE(jsonb_agg(v ORDER BY v->>'accepted_at' DESC),'[]') FROM (
+    let orders: Value = if q.summary_only {
+        empty.clone()
+    } else {
+        sqlx::query_scalar(r#"SELECT COALESCE(jsonb_agg(v ORDER BY v->>'accepted_at' DESC),'[]') FROM (
       SELECT (to_jsonb(o)-'payload')||jsonb_build_object('input_atomic',o.input_atomic::text,
        'minimum_output_atomic',o.minimum_output_atomic::text,'input_decimals',a.decimals,
        'book_id',o.simulation_run_id,'experiment_id',r.manifest->>'experiment_id','strategy_version',r.manifest->>'strategy',
@@ -318,8 +325,12 @@ pub async fn report(stores: &Stores, q: &TruthQuery) -> anyhow::Result<Value> {
       ) iq ON true
       WHERE o.simulation_run_id=ANY($1) AND ($2::timestamptz IS NULL OR o.accepted_at>=$2)
        AND ($3::text IS NULL OR pos.status=$3 OR ($3='OPEN' AND pos.status='UNMARKABLE'))
-      ORDER BY o.accepted_at DESC LIMIT 1000) rows"#).bind(&ids).bind(since).bind(state.as_deref()).fetch_one(&mut *tx).await?};
-    let activity:Value=if q.summary_only { empty } else { sqlx::query_scalar(r#"WITH decision_events AS (
+      ORDER BY o.accepted_at DESC LIMIT 1000) rows"#).bind(&ids).bind(since).bind(state.as_deref()).fetch_one(&mut *tx).await?
+    };
+    let activity: Value = if q.summary_only {
+        empty
+    } else {
+        sqlx::query_scalar(r#"WITH decision_events AS (
       SELECT d.decision_id::text event_id,
        CASE WHEN d.decision_kind='EXIT' THEN 'EXIT_DECISION' ELSE 'STRATEGY_DECISION' END kind,
        d.decision_at at,d.simulation_run_id book_id,d.launch_id,
@@ -331,6 +342,7 @@ pub async fn report(stores: &Stores, q: &TruthQuery) -> anyhow::Result<Value> {
       LEFT JOIN pumphound.paper_positions pos
         ON pos.simulation_run_id=d.simulation_run_id AND pos.launch_id=d.launch_id
       WHERE d.simulation_run_id=ANY($1) AND ($2::timestamptz IS NULL OR d.decision_at>=$2)
+      ORDER BY at DESC LIMIT 400
     ), order_created AS (
       SELECT o.order_id::text||':created' event_id,'ORDER_CREATED' kind,o.accepted_at at,
        o.simulation_run_id book_id,d.launch_id,COALESCE(pos.position_id,d.decision_id) trade_trace_id,
@@ -341,6 +353,7 @@ pub async fn report(stores: &Stores, q: &TruthQuery) -> anyhow::Result<Value> {
       LEFT JOIN pumphound.paper_positions pos
         ON pos.simulation_run_id=o.simulation_run_id AND pos.launch_id=d.launch_id AND pos.market=o.market
       WHERE o.simulation_run_id=ANY($1) AND ($2::timestamptz IS NULL OR o.accepted_at>=$2)
+      ORDER BY at DESC LIMIT 400
     ), order_events AS (
       SELECT e.order_event_id::text event_id,
        CASE WHEN e.status LIKE 'ORDER_%' THEN e.status ELSE 'ORDER_'||e.status END kind,
@@ -353,6 +366,7 @@ pub async fn report(stores: &Stores, q: &TruthQuery) -> anyhow::Result<Value> {
       LEFT JOIN pumphound.paper_positions pos
         ON pos.simulation_run_id=o.simulation_run_id AND pos.launch_id=d.launch_id AND pos.market=o.market
       WHERE o.simulation_run_id=ANY($1) AND ($2::timestamptz IS NULL OR e.at_time>=$2)
+      ORDER BY at DESC LIMIT 400
     ), fill_events AS (
       SELECT f.fill_id::text event_id,CASE WHEN o.side='sell' THEN 'EXIT_FILL' ELSE 'FILL' END kind,
        f.arrival_at at,o.simulation_run_id book_id,d.launch_id,
@@ -366,6 +380,7 @@ pub async fn report(stores: &Stores, q: &TruthQuery) -> anyhow::Result<Value> {
       LEFT JOIN pumphound.paper_positions pos
         ON pos.simulation_run_id=o.simulation_run_id AND pos.launch_id=d.launch_id AND pos.market=o.market
       WHERE o.simulation_run_id=ANY($1) AND ($2::timestamptz IS NULL OR f.arrival_at>=$2)
+      ORDER BY at DESC LIMIT 400
     ), pnl_events AS (
       SELECT c.consumption_id::text event_id,'REALIZED_PNL' kind,sell_fill.arrival_at at,
        lot.simulation_run_id book_id,d.launch_id,pos.position_id trade_trace_id,
@@ -382,15 +397,17 @@ pub async fn report(stores: &Stores, q: &TruthQuery) -> anyhow::Result<Value> {
         ON pos.simulation_run_id=lot.simulation_run_id AND pos.base_mint=lot.base_mint
       WHERE lot.simulation_run_id=ANY($1)
         AND ($2::timestamptz IS NULL OR sell_fill.arrival_at>=$2)
+      ORDER BY at DESC LIMIT 400
     ), position_events AS (
-      SELECT pos.position_id::text||':open' event_id,'POSITION_OPENED' kind,pos.opened_at at,
+      (SELECT pos.position_id::text||':open' event_id,'POSITION_OPENED' kind,pos.opened_at at,
        pos.simulation_run_id book_id,pos.launch_id,pos.position_id trade_trace_id,
        jsonb_build_object('position_id',pos.position_id,'market',pos.market,'base_mint',pos.base_mint,
          'quote_mint',pos.quote_mint,'cost_quote_atomic',pos.cost_quote_atomic::text) payload
       FROM pumphound.paper_positions pos
       WHERE pos.simulation_run_id=ANY($1) AND ($2::timestamptz IS NULL OR pos.opened_at>=$2)
+       ORDER BY at DESC LIMIT 400)
       UNION ALL
-      SELECT pos.position_id::text||':closed','POSITION_CLOSED',pos.closed_at,
+      (SELECT pos.position_id::text||':closed','POSITION_CLOSED',pos.closed_at,
        pos.simulation_run_id,pos.launch_id,pos.position_id,
        jsonb_build_object('position_id',pos.position_id,'realized_pnl_quote_atomic',
          pos.realized_pnl_quote_atomic::text,'quote_mint',pos.quote_mint,
@@ -398,20 +415,24 @@ pub async fn report(stores: &Stores, q: &TruthQuery) -> anyhow::Result<Value> {
       FROM pumphound.paper_positions pos
       WHERE pos.simulation_run_id=ANY($1) AND pos.closed_at IS NOT NULL
         AND ($2::timestamptz IS NULL OR pos.closed_at>=$2)
+      ORDER BY pos.closed_at DESC LIMIT 400)
     ), model_events AS (
-      SELECT DISTINCT ON (p.prediction_id,d.simulation_run_id)
+      SELECT * FROM (SELECT DISTINCT ON (p.prediction_id,d.simulation_run_id)
        p.prediction_id||':'||d.simulation_run_id::text event_id,'MODEL_PREDICTION' kind,p.computed_at at,
        d.simulation_run_id book_id,d.launch_id,COALESCE(pos.position_id,d.decision_id) trade_trace_id,
        jsonb_build_object('prediction_id',p.prediction_id,'model_version',p.model_version,
          'feature_snapshot_id',p.feature_snapshot_id,'familiarity',p.familiarity,
          'abstention_reason',p.abstention_reason,'outputs',p.outputs) payload
-      FROM pumphound.model_predictions p JOIN pumphound.decisions d USING(feature_snapshot_id)
+      FROM (SELECT * FROM pumphound.model_predictions p
+            WHERE ($2::timestamptz IS NULL OR p.computed_at>=$2)
+            ORDER BY p.computed_at DESC LIMIT 5000) p
+      JOIN pumphound.decisions d USING(feature_snapshot_id)
       LEFT JOIN pumphound.paper_positions pos
         ON pos.simulation_run_id=d.simulation_run_id AND pos.launch_id=d.launch_id
-      WHERE d.simulation_run_id=ANY($1) AND ($2::timestamptz IS NULL OR p.computed_at>=$2)
-      ORDER BY p.prediction_id,d.simulation_run_id,d.decision_at
+      WHERE d.simulation_run_id=ANY($1)
+      ORDER BY p.prediction_id,d.simulation_run_id,d.decision_at) m ORDER BY at DESC LIMIT 400
     ), label_events AS (
-      SELECT DISTINCT ON (label.outcome_label_id,d.simulation_run_id)
+      SELECT * FROM (SELECT DISTINCT ON (label.outcome_label_id,d.simulation_run_id)
        label.outcome_label_id||':'||d.simulation_run_id::text event_id,'LABEL_MATURED' kind,
        label.matured_at at,d.simulation_run_id book_id,d.launch_id,
        COALESCE(pos.position_id,d.decision_id) trade_trace_id,
@@ -419,13 +440,14 @@ pub async fn report(stores: &Stores, q: &TruthQuery) -> anyhow::Result<Value> {
          label.target_version,'feature_snapshot_id',label.feature_snapshot_id,
          'maturity_due_at',label.maturity_due_at,'value',label.value,
          'evidence',label.payload) payload
-      FROM pumphound.outcome_labels label
+      FROM (SELECT * FROM pumphound.outcome_labels label
+            WHERE label.status='MATURED' AND ($2::timestamptz IS NULL OR label.matured_at>=$2)
+            ORDER BY label.matured_at DESC LIMIT 5000) label
       JOIN pumphound.decisions d USING(feature_snapshot_id)
       LEFT JOIN pumphound.paper_positions pos
         ON pos.simulation_run_id=d.simulation_run_id AND pos.launch_id=d.launch_id
-      WHERE label.status='MATURED' AND d.simulation_run_id=ANY($1)
-        AND ($2::timestamptz IS NULL OR label.matured_at>=$2)
-      ORDER BY label.outcome_label_id,d.simulation_run_id,d.decision_at
+      WHERE d.simulation_run_id=ANY($1)
+      ORDER BY label.outcome_label_id,d.simulation_run_id,d.decision_at) l ORDER BY at DESC LIMIT 400
     ), risk_events AS (
       SELECT risk.risk_snapshot_id::text event_id,'RISK_UPDATE' kind,risk.at_time at,
        risk.simulation_run_id book_id,NULL::uuid launch_id,NULL::uuid trade_trace_id,
@@ -434,6 +456,7 @@ pub async fn report(stores: &Stores, q: &TruthQuery) -> anyhow::Result<Value> {
          'breaker_state',risk.breaker_state) payload
       FROM pumphound.risk_snapshots risk
       WHERE risk.simulation_run_id=ANY($1) AND ($2::timestamptz IS NULL OR risk.at_time>=$2)
+      ORDER BY at DESC LIMIT 400
     ), all_events AS (
       SELECT * FROM decision_events UNION ALL SELECT * FROM order_created
       UNION ALL SELECT * FROM order_events UNION ALL SELECT * FROM fill_events
@@ -476,7 +499,8 @@ pub async fn report(stores: &Stores, q: &TruthQuery) -> anyhow::Result<Value> {
       ORDER BY x.at DESC,x.event_id),'[]')
     FROM (SELECT * FROM ranked WHERE source_rank<=80 ORDER BY at DESC,event_id) x
     JOIN pumphound.simulation_runs r ON r.simulation_run_id=x.book_id"#)
-      .bind(&ids).bind(since).fetch_one(&mut *tx).await?};
+      .bind(&ids).bind(since).fetch_one(&mut *tx).await?
+    };
     tx.commit().await?;
     let mut summary = summary;
     let atomic = summary["realized_pnl_quote_atomic"].as_str().unwrap_or("0");
@@ -494,7 +518,7 @@ pub async fn report(stores: &Stores, q: &TruthQuery) -> anyhow::Result<Value> {
             })
         });
     Ok(
-        json!({"contract_version":"product-truth-v1","scope":{"label":if q.book_id.is_none() && q.experiment_id.is_none() && q.strategy.is_none() {"ALL ACTIVE PAPER BOOKS"} else {"FILTERED ACTIVE PAPER BOOKS"},"book_ids":ids,"experiment_id":q.experiment_id,"strategy":q.strategy,"state":state.as_deref().unwrap_or("ALL"),"window":q.window.as_deref().unwrap_or("all"),"timezone":"UTC","as_of":now,"active_book_definition":"running simulation run; unarchived portfolio; strategy in manifest","position_window":"closed_at for closed; opened_at for open","activity_scope":"selected books and time; independent of position state"},"limits":{"orders":1000,"activity":"latest 80 per durable activity category"},"summary":summary,"books":books,"available_books":all_books,"positions":positions,"orders":orders,"activity":activity,"paper_only":true}),
+        json!({"contract_version":"product-truth-v1","scope":{"label":if q.book_id.is_none() && q.experiment_id.is_none() && q.strategy.is_none() {"ALL ACTIVE PAPER BOOKS"} else {"FILTERED ACTIVE PAPER BOOKS"},"book_ids":ids,"experiment_id":q.experiment_id,"strategy":q.strategy,"state":state.as_deref().unwrap_or("ALL"),"window":q.window.as_deref().unwrap_or("all"),"timezone":"UTC","as_of":now,"active_book_definition":"running simulation run; unarchived portfolio; strategy in manifest","position_window":"closed_at for closed; opened_at for open","activity_scope":"selected books and time; independent of position state"},"limits":{"orders":1000,"activity":"latest 80 per durable activity category (each source scanned to its latest 400 rows)"},"summary":summary,"books":books,"available_books":all_books,"positions":positions,"orders":orders,"activity":activity,"paper_only":true}),
     )
 }
 

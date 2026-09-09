@@ -440,7 +440,10 @@ pub async fn creator_coordination(stores: &Stores, creator: &str) -> Value {
             "note": "no launches attributed to this creator",
         });
     }
-    let mints: Vec<String> = launches.iter().map(|r| r.get::<String, _>("mint")).collect();
+    let mints: Vec<String> = launches
+        .iter()
+        .map(|r| r.get::<String, _>("mint"))
+        .collect();
     let repeat_rows = sqlx::query(
         r#"WITH ranked AS (
           SELECT gf.asset_mint AS mint, gf.source_node AS wallet, gf.slot,
@@ -479,7 +482,10 @@ pub async fn creator_coordination(stores: &Stores, creator: &str) -> Value {
     .fetch_one(&stores.postgres)
     .await
     .unwrap_or(0);
-    let wallets: Vec<String> = repeat_rows.iter().map(|r| r.get::<String, _>("wallet")).collect();
+    let wallets: Vec<String> = repeat_rows
+        .iter()
+        .map(|r| r.get::<String, _>("wallet"))
+        .collect();
     let external_ties = if wallets.is_empty() {
         Vec::new()
     } else {

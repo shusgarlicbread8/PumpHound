@@ -22,6 +22,26 @@ Honest list as of 2026-09-07. This is not a complete product.
 - Websocket `/api/v1/stream` exists with subscribe/heartbeat. Resume-buffer expiry and `resync_required` are incomplete.
 - Metadata SSRF protections specified in the operations spec are not implemented (no fetcher yet).
 
+## Execution Twin (2026-09-09)
+
+- Legacy paper books (ALPHA-LEARN, RANDOM_CONTROL_V1, LIVE_PAPER_*) remain on `legacy-paper-v1`:
+  1 s fixed delay, decision-time fill, flat fee, no failures. Their P&L is not comparable to
+  `EXECUTION-EDGE-V1` books and is labelled as such in strategy reports.
+- Landing model is a hand-set prior (`landing-v1-prior`); shadow `landing_observations` are being
+  written but have not yet been used to fit it.
+- CU usage is a static per-instruction estimate (`compute-budget-v1-static`), not profiled.
+- Surfpool integration test exists (`just execution-twin-surfpool`) but only the BUY path is
+  covered and it requires a running fork; it has not been run in CI.
+- No Mollusk/LiteSVM fast-path test yet; deterministic protocol parity is via transcribed math +
+  96 archived mainnet trades, not instruction execution.
+- Post-cost outcome labels, Loss Filter, Tail Ranker and Exit Hazard model are not built; the
+  ML system still trains on the legacy targets. Do not read any model score as post-cost EV.
+- Confidence-derived sizing is disabled (`PUMPHOUND_CONFIDENCE_SIZING` unset) per GATE 9. The
+  inversion has been quarantined, not explained.
+- Sample sizes for `EXECUTION-EDGE-V1` books are in the engineering-sanity range (<30 closed
+  trades per book). Nothing about their P&L is evidence.
+- See `docs/EXECUTION_TWIN.md` for the full modeled-cost list and simulation gaps.
+
 ## Product limits that remain even when complete
 
 - **No live execution.** Paper and replay only. Counterfactual impact cannot know how other traders would have reacted (`bounded_shadow` vs `impact_overlay`).

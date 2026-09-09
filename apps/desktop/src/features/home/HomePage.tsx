@@ -14,6 +14,16 @@ export function HomePage() {
     queryFn: api.readiness,
     refetchInterval: 4000,
   });
+  const execution = useQuery({
+    queryKey: ["execution-status"],
+    queryFn: api.executionStatus,
+    refetchInterval: 5000,
+  });
+  const fidelity = useQuery({
+    queryKey: ["execution-fidelity"],
+    queryFn: api.executionFidelity,
+    refetchInterval: 10_000,
+  });
 
   if (home.isLoading) return <div className="p-3 text-muted">Loading cockpit…</div>;
   if (home.isError || !home.data) {
@@ -49,10 +59,11 @@ export function HomePage() {
         </span>
       </div>
 
-      <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-5">
+      <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-6">
         {["MARKET DATA", "EXECUTION", "MODELS", "DATABASE", "AI"].map((key) => (
           <StatusCard key={key} label={key} value={asString(subsystems[key], "UNKNOWN")} />
         ))}
+        <StatusCard label="EXECUTION TWIN" value={asString(asRecord(execution.data).state, "UNKNOWN")} />
       </div>
       {asArray<string>(ready.reasons).length ? (
         <p className="mb-3 text-label text-negative">{asArray<string>(ready.reasons).join(" · ")}</p>
@@ -79,8 +90,8 @@ export function HomePage() {
         </p>
       ) : null}
 
-      <div className="mb-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
-        <section className="panel overflow-hidden">
+      <div className="mb-3 grid grid-cols-1 gap-3 lg:grid-cols-3">
+        <section className="panel overflow-hidden lg:col-span-2">
           <div className="border-b border-hairline px-2 py-1.5 text-header">Strategy arena</div>
           {strategies.length === 0 ? (
             <EmptyState title="No strategy books" reason="Reports appear after paper desks exist." />
@@ -91,6 +102,9 @@ export function HomePage() {
                   <th className="px-2 py-1 font-normal">Book</th>
                   <th className="px-2 py-1 font-normal">N</th>
                   <th className="px-2 py-1 font-normal">P&L</th>
+                  <th className="px-2 py-1 font-normal">ex-largest</th>
+                  <th className="px-2 py-1 font-normal">Top-1 share</th>
+                  <th className="px-2 py-1 font-normal">Sim</th>
                   <th className="px-2 py-1 font-normal">Status</th>
                 </tr>
               </thead>
@@ -102,6 +116,9 @@ export function HomePage() {
                       <td className="px-2 py-1 font-mono"><a className="text-info" href={`/strategies#book-${metrics.bookId}`}>{metrics.key}</a></td>
                       <td className="px-2 py-1 tabular-nums">{metrics.closed ?? "UNKNOWN"}</td>
                       <td className="px-2 py-1 font-mono">{metrics.netPnlDisplay}</td>
+                      <td className={`px-2 py-1 font-mono${metrics.headlineDependsOnLargest ? " text-amber" : ""}`}>{metrics.netExLargestDisplay}</td>
+                      <td className="px-2 py-1 font-mono">{metrics.top1ShareDisplay}</td>
+                      <td className="px-2 py-1 text-muted">{metrics.simulatorVersion.startsWith("execution-twin") ? "TWIN" : "LEGACY"}</td>
                       <td className="px-2 py-1 text-amber">{metrics.sample} · {metrics.edge}</td>
                     </tr>
                   );
@@ -109,6 +126,11 @@ export function HomePage() {
               </tbody>
             </table>
           )}
+        </section>
+
+        <section className="panel overflow-hidden">
+          <div className="border-b border-hairline px-2 py-1.5 text-header">Execution twin</div>
+          <ExecutionPanel status={asRecord(execution.data)} fidelity={asRecord(fidelity.data)} />
         </section>
 
         <section className="panel overflow-hidden">
@@ -233,4 +255,48 @@ function Kpi({ k, v, href }: { k: string; v: string; href: string }) {
 function fmtProb(value: unknown): string {
   const n = asNumber(value);
   return n == null ? "NOT ATTACHED" : n.toFixed(3);
+}
+
+
+function ExecutionPanel({ status, fidelity }: { status: Record<string, unknown>; fidelity: Record<string, unknown> }) {
+  const components = asRecord(status.components);
+  const oracle = asRecord(components.fee_oracle);
+  const surfpool = asRecord(components.surfpool_verification);
+  const books = asArray(fidelity.books);
+  const pct = (v: unknown) => (asNumber(v) == null ? "—" : `${(asNumber(v)! * 100).toFixed(0)}%`);
+  const lamportsSol = (v: unknown) => {
+    const n = Number(typeof v === "string" ? v : asNumber(v) ?? NaN);
+    return Number.isFinite(n) ? `${(n / 1e9).toFixed(6)} SOL` : "—";
+  };
+  return (
+    <div className="p-2 text-label">
+      <div className="grid grid-cols-2 gap-2">
+        <div><div className="label">Simulator</div><div className="font-mono">{asString(status.simulator_version, "UNKNOWN")}</div></div>
+        <div><div className="label">Landing model</div><div className="font-mono">{asString(status.landing_model_version, "UNKNOWN")}</div></div>
+        <div><div className="label">Fee oracle</div><div className="font-mono">{asString(oracle.state, "UNKNOWN")} · {asString(oracle.congestion, "?")}</div></div>
+        <div><div className="label">Offline verification</div><div className="font-mono">{asString(surfpool.state, "UNKNOWN")}</div></div>
+      </div>
+      {books.length === 0 ? (
+        <p className="mt-2 text-muted">No twin attempts yet. Execution-twin books record attempt/fill/failure per order; legacy books assume every order fills.</p>
+      ) : (
+        <table className="mt-2 w-full text-left">
+          <thead className="text-muted"><tr><th className="py-1 font-normal">Book</th><th className="py-1 font-normal">Attempts</th><th className="py-1 font-normal">Fill</th><th className="py-1 font-normal">Med. slots</th><th className="py-1 font-normal">Failed cost</th></tr></thead>
+          <tbody>
+            {books.map((row, i) => {
+              const b = asRecord(row);
+              return (
+                <tr key={i} className="border-t border-hairline">
+                  <td className="py-1 font-mono">{asString(b.strategy_version)}</td>
+                  <td className="py-1 tabular-nums">{asString(b.attempts, "0")}</td>
+                  <td className="py-1 tabular-nums">{pct(b.fill_rate)}</td>
+                  <td className="py-1 tabular-nums">{asNumber(b.median_landing_slots) == null ? "—" : asNumber(b.median_landing_slots)!.toFixed(1)}</td>
+                  <td className="py-1 font-mono">{lamportsSol(b.failed_attempt_cost_lamports)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
 }

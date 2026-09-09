@@ -38,6 +38,34 @@ impl InMemoryMarketReducer {
         self.by_market.values().map(|m| &m.snapshot)
     }
 
+    /// Insert or refresh a market from a source other than the event stream (currently: the
+    /// on-chain account read used to unstrand cold paper positions). Never overwrites a hot
+    /// market whose last observation is newer than `snapshot`.
+    pub fn upsert_snapshot(&mut self, snapshot: MarketSnapshot) -> bool {
+        let mk = snapshot.market.to_string();
+        if let Some(existing) = self.by_market.get(&mk) {
+            if existing.snapshot.as_of.slot > snapshot.as_of.slot {
+                return false;
+            }
+        }
+        self.mint_to_market.insert(snapshot.mint.to_string(), mk.clone());
+        match self.by_market.get_mut(&mk) {
+            Some(m) => m.snapshot = snapshot,
+            None => {
+                self.by_market.insert(
+                    mk,
+                    Market {
+                        snapshot,
+                        buyers: Default::default(),
+                        volume_quote: 0,
+                        last_signature: String::new(),
+                    },
+                );
+            }
+        }
+        true
+    }
+
     pub fn buyer_count(&self, market_or_mint: &str) -> usize {
         self.by_market
             .get(market_or_mint)

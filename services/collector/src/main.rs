@@ -9,7 +9,7 @@ use pumphound_domain::{
 };
 use pumphound_protocol_pump::PumpBondingCurveDecoder;
 use pumphound_protocol_pumpswap::PumpSwapDecoder;
-use pumphound_storage::{append_journal, journal_path, Stores};
+use pumphound_storage::Stores;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
@@ -93,6 +93,7 @@ async fn main() -> anyhow::Result<()> {
         );
     }
     let data_dir = cfg.data_dir.clone();
+    let evidence = pumphound_storage::EvidenceWriter::spawn(data_dir.clone());
     let mut seen_tx = 0u64;
     let mut decoded = 0u64;
     let mut quarantined = 0u64;
@@ -135,7 +136,10 @@ async fn main() -> anyhow::Result<()> {
         }
 
         let batch_id = Uuid::now_v7();
-        let journal_uri = journal_path(&data_dir, batch_id);
+        let journal_uri = format!(
+            "{}#batch={batch_id}",
+            pumphound_storage::journal_stream(raw.observed_at)
+        );
         let durable = DurableBatch {
             batch_id,
             content_sha256: payload_sha256(raw.payload_sha256.as_bytes()),
@@ -153,23 +157,49 @@ async fn main() -> anyhow::Result<()> {
             },
             journal_uri: journal_uri.clone(),
         };
-        if let Err(e) = append_journal(&journal_uri, &durable).await {
-            warn!(error = %e, "journal write failed");
-            continue;
+        // Write-behind: the journal/archive volume is slow on file creation; the ingest path
+        // must not pay for it per sighting (see storage::EvidenceWriter).
+        match serde_json::to_vec(&durable) {
+            Ok(line) => {
+                evidence
+                    .append(pumphound_storage::journal_stream(raw.observed_at), line)
+                    .await
+            }
+            Err(e) => warn!(error = %e, "journal encode failed"),
         }
-        if let Err(e) = stores.persist_raw_batch(&durable).await {
-            warn!(error = %e, "raw persist failed; continuing decode");
-        }
-        let _ = stores.record_checkpoint(&durable.cursor).await;
-
         let parsed: Result<RawTransaction, _> = serde_json::from_value(raw.payload.clone());
         let Ok(mut transaction) = parsed else {
+            // Still make the sighting durable so the batch/checkpoint ledger stays complete.
+            if let Err(e) = stores.persist_raw_batch(&durable).await {
+                warn!(error = %e, "raw persist failed");
+            }
+            let _ = stores.record_checkpoint(&durable.cursor).await;
             warn!("envelope payload is not a RawTransaction");
             continue;
         };
         seen_tx += 1;
-        if let Err(e) = stores.archive_raw(&data_dir, &raw, &transaction).await {
-            warn!(error = %e, "raw archive");
+        {
+            let stream = pumphound_storage::Stores::raw_archive_stream(&raw);
+            let body = pumphound_storage::Stores::raw_archive_body(&raw, &transaction);
+            if let Ok(line) = serde_json::to_vec(&body) {
+                evidence.append(stream.clone(), line).await;
+            }
+            let uri = format!("{stream}#sig={}", transaction.signature);
+            // The batch row, the source checkpoint and the archive index are independent
+            // writes (Postgres ×2, ClickHouse ×1). Issued sequentially they cost ~3 round
+            // trips per sighting; the ingest loop was store-latency bound at ~30 tx/s.
+            let (persisted, checkpointed, indexed) = tokio::join!(
+                stores.persist_raw_batch(&durable),
+                stores.record_checkpoint(&durable.cursor),
+                stores.index_raw_archive(&raw, &transaction, &uri),
+            );
+            if let Err(e) = persisted {
+                warn!(error = %e, "raw persist failed; continuing decode");
+            }
+            let _ = checkpointed;
+            if let Err(e) = indexed {
+                warn!(error = %e, "raw archive index");
+            }
         }
         let mut events = decode_events(&transaction, &pump, &pumpswap, &replay_canonical);
         let logs_only =
@@ -202,7 +232,10 @@ async fn main() -> anyhow::Result<()> {
                 let upgraded_raw =
                     envelope_from_tx(&full, raw.transport.reconnect_generation, None);
                 let upgraded_batch_id = Uuid::now_v7();
-                let upgraded_journal = journal_path(&data_dir, upgraded_batch_id);
+                let upgraded_journal = format!(
+                    "{}#batch={upgraded_batch_id}",
+                    pumphound_storage::journal_stream(upgraded_raw.observed_at)
+                );
                 let upgraded_batch = DurableBatch {
                     batch_id: upgraded_batch_id,
                     content_sha256: payload_sha256(upgraded_raw.payload_sha256.as_bytes()),
@@ -216,20 +249,31 @@ async fn main() -> anyhow::Result<()> {
                     },
                     journal_uri: upgraded_journal.clone(),
                 };
-                let durable_upgrade = match append_journal(&upgraded_journal, &upgraded_batch).await
-                {
-                    Ok(()) => stores
-                        .persist_raw_batch(&upgraded_batch)
-                        .await
-                        .map_err(anyhow::Error::from),
-                    Err(error) => Err(error),
-                };
+                if let Ok(line) = serde_json::to_vec(&upgraded_batch) {
+                    evidence
+                        .append(
+                            pumphound_storage::journal_stream(upgraded_raw.observed_at),
+                            line,
+                        )
+                        .await;
+                }
+                let durable_upgrade = stores
+                    .persist_raw_batch(&upgraded_batch)
+                    .await
+                    .map_err(anyhow::Error::from);
                 match durable_upgrade {
                     Ok(()) => {
+                        let stream = pumphound_storage::Stores::raw_archive_stream(&upgraded_raw);
+                        if let Ok(line) = serde_json::to_vec(
+                            &pumphound_storage::Stores::raw_archive_body(&upgraded_raw, &full),
+                        ) {
+                            evidence.append(stream.clone(), line).await;
+                        }
+                        let uri = format!("{stream}#sig={}", full.signature);
                         if let Err(error) =
-                            stores.archive_raw(&data_dir, &upgraded_raw, &full).await
+                            stores.index_raw_archive(&upgraded_raw, &full, &uri).await
                         {
-                            warn!(%error, "hot-set upgraded archive");
+                            warn!(%error, "hot-set upgraded archive index");
                         }
                         transaction = full;
                         events = decode_events(&transaction, &pump, &pumpswap, &replay_canonical);
@@ -252,9 +296,15 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        // Idempotency claims are issued concurrently across the (typically 1–3) events of one
+        // transaction; each claim is an independent unique-key insert.
+        let claims = futures::future::join_all(
+            events.iter().map(|ev| stores.claim_event_key(ev)),
+        )
+        .await;
         let mut fresh = Vec::new();
-        for ev in events {
-            match stores.claim_event_key(&ev).await {
+        for (ev, claim) in events.into_iter().zip(claims) {
+            match claim {
                 Ok(false) => {
                     duplicate_skips += 1;
                     continue;
@@ -270,50 +320,46 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 decoded += 1;
             }
-            if let Err(e) = stores.upsert_launch_from_event(&ev).await {
-                warn!(error = %e, "launch upsert");
-            }
-            if let Err(e) = stores.upsert_graph_from_event(&ev).await {
-                warn!(error = %e, "graph upsert");
-            }
             fresh.push(ev);
         }
         let events = fresh;
-        if let Err(e) = stores.persist_canonical(&events).await {
+        // Launch and graph projections are independent of each other and of the ClickHouse
+        // canonical revision store; only the claim above must precede them. NATS fan-out stays
+        // after the launch upsert so consumers (paper loop decisions reference `launches`)
+        // never see an event before its launch row exists.
+        // Launch upserts stay in event order within a transaction (a `create` must claim the
+        // launch_id before the same transaction's first trade); graph upserts are independent.
+        let (launches, graphs, canonical) = tokio::join!(
+            async {
+                let mut out = Vec::with_capacity(events.len());
+                for ev in &events {
+                    out.push(stores.upsert_launch_from_event(ev).await);
+                }
+                out
+            },
+            futures::future::join_all(events.iter().map(|ev| stores.upsert_graph_from_event(ev))),
+            stores.persist_canonical(&events),
+        );
+        for e in launches.into_iter().filter_map(Result::err) {
+            warn!(error = %e, "launch upsert");
+        }
+        for e in graphs.into_iter().filter_map(Result::err) {
+            warn!(error = %e, "graph upsert");
+        }
+        if let Err(e) = canonical {
             warn!(error = %e, "canonical persist failed; still publishing");
         }
         if !events.is_empty() {
             if let Err(e) = stores.publish("chain.normalized.v1", &events).await {
                 warn!(error = %e, "nats publish");
             }
-            let events_path = format!("{}/journal/events.jsonl", data_dir);
-            if let Some(parent) = std::path::Path::new(&events_path).parent() {
-                let _ = tokio::fs::create_dir_all(parent).await;
-            }
-            if let Ok(mut f) = tokio::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&events_path)
-                .await
-            {
-                use tokio::io::AsyncWriteExt;
-                // One buffer, one write_all call for the whole batch. O_APPEND only guarantees
-                // atomic positioning per write() syscall — writing content and its trailing
-                // newline as two separate write_all calls left a window where a concurrent
-                // writer (another task appending to the same path) could land its own full
-                // line in between, producing two JSON objects concatenated on one physical
-                // line with no newline separating them. That's exactly the corruption pattern
-                // ml/pumphound_ml/extraction/sources.py had to start tolerating (18 such lines
-                // found in the live journal). Batching into one write closes the window.
-                let mut batch = String::new();
-                for ev in &events {
-                    if let Ok(line) = serde_json::to_string(ev) {
-                        batch.push_str(&line);
-                        batch.push('\n');
-                    }
-                }
-                if !batch.is_empty() {
-                    let _ = f.write_all(batch.as_bytes()).await;
+            // Canonical event journal (read by ml/pumphound_ml/extraction/sources.py). Routed
+            // through the single-task EvidenceWriter: one write per line, no concurrent
+            // appenders, so lines can never interleave, and the ingest loop never blocks on
+            // the volume.
+            for ev in &events {
+                if let Ok(line) = serde_json::to_vec(ev) {
+                    evidence.append("journal/events.jsonl".to_string(), line).await;
                 }
             }
         }

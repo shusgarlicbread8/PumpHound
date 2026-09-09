@@ -17,3 +17,6 @@ thiserror.workspace = true
 curve25519-dalek.workspace = true
 
 [dev-dependencies]
+reqwest = { workspace = true, features = ["blocking"] }
+base64.workspace = true
+hex.workspace = true

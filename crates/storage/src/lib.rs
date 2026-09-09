@@ -855,6 +855,63 @@ impl Stores {
         }
     }
 
+    /// Raw evidence body for one sighting (what the per-signature archive file used to hold).
+    pub fn raw_archive_body(
+        envelope: &RawChainEnvelope,
+        tx: &pumphound_domain::RawTransaction,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "sighting_id": envelope.sighting_id,
+            "source": envelope.source,
+            "source_cursor": envelope.source_cursor,
+            "slot": envelope.slot.to_string(),
+            "commitment": format!("{:?}", envelope.commitment).to_lowercase(),
+            "observed_at": envelope.observed_at,
+            "payload_sha256": envelope.payload_sha256,
+            "decoder_version": pumphound_domain::DECODER_VERSION,
+            "transaction": tx,
+        })
+    }
+
+    /// Hourly NDJSON stream the raw archive is appended to. One file per hour instead of one
+    /// file per signature: on the external sparsebundle volume a file *creation* costs ~70 ms
+    /// while an append to an open handle costs ~0.2 ms, and the per-signature layout had capped
+    /// the collector at ~5 sightings/s (50+ minutes behind chain, observed 2026-09-09).
+    pub fn raw_archive_stream(envelope: &RawChainEnvelope) -> String {
+        format!(
+            "archive/raw/date={}/{}.ndjson",
+            envelope.observed_at.format("%Y-%m-%d"),
+            envelope.observed_at.format("%H")
+        )
+    }
+
+    /// Index one archived sighting. `archive_uri` is `<stream>#sig=<signature>` for the NDJSON
+    /// layout or the legacy per-signature path.
+    pub async fn index_raw_archive(
+        &self,
+        envelope: &RawChainEnvelope,
+        tx: &pumphound_domain::RawTransaction,
+        archive_uri: &str,
+    ) -> Result<(), StorageError> {
+        sqlx::query(
+            r#"INSERT INTO pumphound.raw_archive_index
+            (signature, slot, payload_sha256, archive_uri, source, decoder_version)
+            VALUES ($1,$2,$3,$4,$5,$6)
+            ON CONFLICT (signature) DO NOTHING"#,
+        )
+        .bind(&tx.signature)
+        .bind(tx.slot.0 as i64)
+        .bind(&envelope.payload_sha256)
+        .bind(archive_uri)
+        .bind(&envelope.source)
+        .bind(pumphound_domain::DECODER_VERSION)
+        .execute(&self.postgres)
+        .await?;
+        Ok(())
+    }
+
+    /// Legacy synchronous per-signature archive (kept for tools/backfill). The live collector
+    /// uses `EvidenceWriter` + `index_raw_archive`.
     pub async fn archive_raw(
         &self,
         data_dir: &str,
@@ -869,34 +926,11 @@ impl Stores {
                 .await
                 .map_err(|e| StorageError::Config(e.to_string()))?;
         }
-        let body = serde_json::json!({
-            "sighting_id": envelope.sighting_id,
-            "source": envelope.source,
-            "source_cursor": envelope.source_cursor,
-            "slot": envelope.slot.to_string(),
-            "commitment": format!("{:?}", envelope.commitment).to_lowercase(),
-            "observed_at": envelope.observed_at,
-            "payload_sha256": envelope.payload_sha256,
-            "decoder_version": pumphound_domain::DECODER_VERSION,
-            "transaction": tx,
-        });
+        let body = Self::raw_archive_body(envelope, tx);
         tokio::fs::write(&path, serde_json::to_vec_pretty(&body).unwrap_or_default())
             .await
             .map_err(|e| StorageError::Config(e.to_string()))?;
-        sqlx::query(
-            r#"INSERT INTO pumphound.raw_archive_index
-            (signature, slot, payload_sha256, archive_uri, source, decoder_version)
-            VALUES ($1,$2,$3,$4,$5,$6)
-            ON CONFLICT (signature) DO NOTHING"#,
-        )
-        .bind(&tx.signature)
-        .bind(tx.slot.0 as i64)
-        .bind(&envelope.payload_sha256)
-        .bind(&rel)
-        .bind(&envelope.source)
-        .bind(pumphound_domain::DECODER_VERSION)
-        .execute(&self.postgres)
-        .await?;
+        self.index_raw_archive(envelope, tx, &rel).await?;
         Ok(rel)
     }
 
@@ -1325,41 +1359,48 @@ impl Stores {
         Ok(written)
     }
 
+    /// Health/cockpit counters. These are planner estimates (`pg_class.reltuples`, refreshed by
+    /// autovacuum/ANALYZE), not exact `COUNT(*)`: the exact counts over 1.4M-row archive tables
+    /// ran on every /health poll and were observed as parallel multi-second `DataFileRead` waits
+    /// competing with the collector's inserts and the paper loop. The payload says so.
     pub async fn capture_metrics(&self) -> Result<serde_json::Value, StorageError> {
-        let archived: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pumphound.raw_archive_index")
-            .fetch_one(&self.postgres)
-            .await
-            .unwrap_or(0);
-        let unique_events: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM pumphound.canonical_event_keys")
-                .fetch_one(&self.postgres)
-                .await
-                .unwrap_or(0);
-        let wallets: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pumphound.wallet_profiles")
-            .fetch_one(&self.postgres)
-            .await
-            .unwrap_or(0);
+        #[derive(sqlx::FromRow)]
+        struct Estimate {
+            relname: String,
+            rows: i64,
+        }
+        let estimates: Vec<Estimate> = sqlx::query_as(
+            r#"SELECT c.relname, GREATEST(c.reltuples,0)::bigint AS rows
+               FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+               WHERE n.nspname='pumphound'
+                 AND c.relname IN ('raw_archive_index','canonical_event_keys','wallet_profiles',
+                                   'wallet_cohorts','derived_edges')"#,
+        )
+        .fetch_all(&self.postgres)
+        .await
+        .unwrap_or_default();
+        let estimate = |name: &str| {
+            estimates
+                .iter()
+                .find(|e| e.relname == name)
+                .map(|e| e.rows)
+                .unwrap_or(0)
+        };
+        // funding_queue is small and status-filtered; keep it exact.
         let queued: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM pumphound.funding_queue WHERE status='queued'",
         )
         .fetch_one(&self.postgres)
         .await
         .unwrap_or(0);
-        let cohorts: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pumphound.wallet_cohorts")
-            .fetch_one(&self.postgres)
-            .await
-            .unwrap_or(0);
-        let derived: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pumphound.derived_edges")
-            .fetch_one(&self.postgres)
-            .await
-            .unwrap_or(0);
         Ok(json!({
-            "archive_rows": archived,
-            "unique_events": unique_events,
-            "wallet_profiles": wallets,
+            "archive_rows": estimate("raw_archive_index"),
+            "unique_events": estimate("canonical_event_keys"),
+            "wallet_profiles": estimate("wallet_profiles"),
             "funding_queued": queued,
-            "cohorts": cohorts,
-            "derived_edges": derived,
+            "cohorts": estimate("wallet_cohorts"),
+            "derived_edges": estimate("derived_edges"),
+            "count_basis": "planner_estimate_reltuples",
             "model": "MODEL NOT TRAINED"
         }))
     }
@@ -1523,6 +1564,81 @@ fn flatten(ev: &ChainEvent) -> (String, String, String, String, String, u128, u1
 
 pub fn journal_path(data_dir: &str, batch_id: Uuid) -> String {
     format!("{data_dir}/journal/{batch_id}.json")
+}
+
+/// Hourly NDJSON raw-batch journal (one line per `DurableBatch`); see `raw_archive_stream`
+/// for why streams replace per-batch files. Returned relative to `data_dir`.
+pub fn journal_stream(at: chrono::DateTime<chrono::Utc>) -> String {
+    format!("journal/{}/{}.ndjson", at.format("%Y-%m-%d"), at.format("%H"))
+}
+
+/// Write-behind appender for evidence streams (journal + raw archive). Ordering within a
+/// stream is preserved; the ingest loop never waits on the volume except when the queue is
+/// full (bounded, so memory cannot grow without limit). Failures are logged, never fatal:
+/// Postgres/ClickHouse hold the canonical rows; these files are evidence.
+#[derive(Clone)]
+pub struct EvidenceWriter {
+    tx: tokio::sync::mpsc::Sender<(String, Vec<u8>)>,
+}
+
+impl EvidenceWriter {
+    pub fn spawn(data_dir: String) -> Self {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<(String, Vec<u8>)>(20_000);
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            let mut open: HashMap<String, tokio::fs::File> = HashMap::new();
+            while let Some((rel, mut line)) = rx.recv().await {
+                line.push(b'\n');
+                if !open.contains_key(&rel) {
+                    // Rotate: streams are hourly, keep only a handful of handles open.
+                    if open.len() >= 8 {
+                        for (_, mut f) in open.drain() {
+                            let _ = f.flush().await;
+                        }
+                    }
+                    let path = format!("{data_dir}/{rel}");
+                    if let Some(parent) = std::path::Path::new(&path).parent() {
+                        let _ = tokio::fs::create_dir_all(parent).await;
+                    }
+                    match tokio::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&path)
+                        .await
+                    {
+                        Ok(file) => {
+                            open.insert(rel.clone(), file);
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, path, "evidence stream open failed; line dropped");
+                            continue;
+                        }
+                    }
+                }
+                if let Some(file) = open.get_mut(&rel) {
+                    if let Err(error) = file.write_all(&line).await {
+                        tracing::warn!(%error, rel, "evidence stream write failed");
+                        open.remove(&rel);
+                    } else if rx.is_empty() {
+                        let _ = file.flush().await;
+                    }
+                }
+            }
+        });
+        Self { tx }
+    }
+
+    /// Queue one line for `rel` (path relative to the data dir). Applies backpressure only
+    /// when 20k lines are pending.
+    pub async fn append(&self, rel: String, line: Vec<u8>) {
+        if let Err(err) = self.tx.send((rel, line)).await {
+            tracing::warn!(rel = err.0 .0, "evidence writer stopped; line dropped");
+        }
+    }
+
+    pub fn pending(&self) -> usize {
+        self.tx.max_capacity() - self.tx.capacity()
+    }
 }
 
 pub async fn append_journal(path: &str, batch: &DurableBatch) -> anyhow::Result<()> {

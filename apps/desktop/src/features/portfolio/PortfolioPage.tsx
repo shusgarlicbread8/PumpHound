@@ -331,6 +331,7 @@ function PortfolioContents({
                   <Th right>Size</Th>
                   <Th right>Cost basis</Th>
                   <Th right>Current value</Th>
+                  <Th right>Liquidation cost</Th>
                   <Th right>Realized</Th>
                   <Th right>Unrealized</Th>
                   <Th right>MFE</Th>
@@ -363,7 +364,12 @@ function PortfolioContents({
                       <Td>{position.status ?? "Unknown"}</Td>
                       <Td right mono>{positionAmountText(position.size, position.base_atomic, position.base_mint)}</Td>
                       <Td right mono>{positionAmountText(position.cost_basis, position.cost_quote_atomic, position.quote_mint)}</Td>
-                      <Td right mono>{positionAmountText(position.current_value, position.executable_exit_quote_atomic, position.quote_mint)}</Td>
+                      <Td right mono title={`mark: ${position.mark_status ?? "UNKNOWN"} · ${position.mark_simulator_version ?? ""}`}>{positionAmountText(position.current_value, position.executable_exit_quote_atomic, position.quote_mint)}</Td>
+                      <Td right mono title="theoretical mid×size minus executable liquidation proceeds (protocol fees + impact + network cost)">
+                        {position.liquidation_cost_quote_atomic == null
+                          ? "Unknown"
+                          : `${positionAmountText(null, position.liquidation_cost_quote_atomic, position.quote_mint)}${position.liquidation_impact_bps == null ? "" : ` (${String(position.liquidation_impact_bps)} bps)`}`}
+                      </Td>
                       <Td right mono className={amountTone(position.realized_pnl)}>{positionAmountText(position.realized_pnl, position.realized_pnl_quote_atomic, position.quote_mint)}</Td>
                       <Td right mono className={amountTone(position.unrealized_pnl)}>{positionAmountText(position.unrealized_pnl, position.unrealized_pnl_quote_atomic, position.quote_mint)}</Td>
                       <Td right mono>{valueText(position.mfe)}</Td>

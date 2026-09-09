@@ -83,6 +83,17 @@ pub enum TransactionKind {
     PumpSwapSell,
 }
 
+impl TransactionKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TransactionKind::PumpBuyExactSolIn => "PUMP_BUY_EXACT_SOL_IN",
+            TransactionKind::PumpSell => "PUMP_SELL",
+            TransactionKind::PumpSwapBuyExactQuoteIn => "PUMP_SWAP_BUY_EXACT_QUOTE_IN",
+            TransactionKind::PumpSwapSell => "PUMP_SWAP_SELL",
+        }
+    }
+}
+
 /// Why a simulated transaction did not deliver the requested swap.
 ///
 /// Fee semantics: `charges_network_fee()` is true only when the transaction would have been

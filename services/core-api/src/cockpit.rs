@@ -21,7 +21,8 @@ pub async fn home(state: &AppState) -> anyhow::Result<Value> {
         away_feed(state),
         crate::readiness::alerts_json(state),
     );
-    let hot = hot.unwrap_or_else(|_| json!({"active_count": 0, "members": [], "recent_events": []}));
+    let hot =
+        hot.unwrap_or_else(|_| json!({"active_count": 0, "members": [], "recent_events": []}));
     let strategies = strategies.unwrap_or_else(|_| json!({"items": []}));
     let learning = learning.unwrap_or_else(|_| json!({}));
     let portfolio = portfolio.unwrap_or_else(|error| {

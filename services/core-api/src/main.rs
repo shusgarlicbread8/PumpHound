@@ -11,6 +11,9 @@ mod ledger_metrics;
 mod metadata;
 mod model_client;
 mod model_truth;
+mod execution_routes;
+mod execution_twin_bridge;
+mod market_rehydrate;
 mod paper_ledger;
 mod paper_loop;
 mod readiness;
@@ -45,6 +48,7 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("recover paper portfolios")?;
     consume_normalized(state.clone());
+    execution_twin_bridge::spawn_fee_oracle(state.clone());
     paper_loop::spawn(state.clone());
     intelligence::spawn(state.clone());
 

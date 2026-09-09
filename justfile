@@ -157,6 +157,29 @@ verify:
 verify-live:
     cargo run -p pumphound-collector --bin verify-live
 
+# Execution Twin: exact Pump/PumpSwap math + PDA + fee + landing + replay-determinism tests,
+# including golden parity against archived mainnet trades (GATE 1). Deterministic, no network.
+execution-twin-test:
+    cargo test -p pumphound-execution-twin
+    cargo test -p pumphound-core-api -- execution_twin market_rehydrate gate9 tail_metrics
+
+# Execution Twin vs a Surfpool mainnet fork (GATE 14, offline verification only). Requires a
+# running fork: `surfpool start` then PUMPHOUND_SURFPOOL_RPC_URL=http://127.0.0.1:8899.
+# Surfpool being offline degrades verification; it never blocks paper trading.
+execution-twin-surfpool rpc="http://127.0.0.1:8899":
+    PUMPHOUND_SURFPOOL_RPC_URL={{rpc}} cargo test -p pumphound-execution-twin --test surfpool_integration -- --ignored --nocapture
+
+# Deterministic replay of a twin trace through the running core-api; optional counterfactuals
+# (results are labelled simulations, never written over the original result).
+# e.g. just execution-replay 0192... '{"landing_delay_slots":1,"priority_fee_policy":"P95"}'
+execution-replay trace_id body='{}':
+    curl -s -X POST -H 'content-type: application/json' -d '{{body}}' \
+      http://127.0.0.1:8080/api/v1/execution/replay/{{trace_id}} | python3 -m json.tool
+
+# Execution fidelity per book (attempts / fills / failure classes / cost attribution).
+execution-fidelity:
+    curl -s http://127.0.0.1:8080/api/v1/execution/fidelity | python3 -m json.tool
+
 # Re-decode the labelled fixture (or a raw archive path). Must hash identically twice.
 verify-archive *args:
     cargo run -q -p pumphound-collector --bin verify-archive -- {{args}}

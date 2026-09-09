@@ -65,9 +65,17 @@ CROSS JOIN (VALUES
     ('expected_mfe_5m_v1', 300)
 ) AS spec(target_version, horizon_seconds)
 WHERE fs.knowledge_cutoff <= %s
+  AND fs.knowledge_cutoff >= %s
   AND run.manifest->>'experiment_id' = 'ALPHA-LEARN'
 ON CONFLICT (feature_snapshot_id, target_version) DO NOTHING
 """
+
+# Scheduling is idempotent (ON CONFLICT DO NOTHING) and runs every 30 s. Without a lower bound it
+# re-derived 10 candidate rows for every feature snapshot ever written (72k snapshots -> 720k
+# conflict checks per run) and was the single largest steady-state Postgres CPU consumer,
+# starving the collector's inserts. Snapshots older than this window were scheduled by an
+# earlier run; the one-off backfill path (`schedule_lookback=None`) still covers full history.
+SCHEDULE_LOOKBACK_SECONDS = 6 * 3600
 
 CLAIM_DUE_SQL = """
 SELECT
@@ -306,7 +314,10 @@ class PostgresLabelMaturer:
             connection.transaction(),
             connection.cursor() as cursor,
         ):
-            cursor.execute(SCHEDULE_SQL, (now,))
+            cursor.execute(
+                SCHEDULE_SQL,
+                (now, now - timedelta(seconds=SCHEDULE_LOOKBACK_SECONDS)),
+            )
             scheduled = max(int(cursor.rowcount or 0), 0)
             while matured + withheld < limit:
                 chunk_limit = min(2000, limit - (matured + withheld))

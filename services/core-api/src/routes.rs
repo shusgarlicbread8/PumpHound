@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
+        .merge(crate::execution_routes::router())
         .route("/api/v1/health", get(health))
         .route("/api/v1/paper/truth", get(paper_truth))
         .route("/api/v1/paper/traces/{id}", get(paper_trace))
@@ -370,8 +371,7 @@ struct LaunchQ {
 const RADAR_ROW_COLUMNS: &str = "l.launch_id::text, l.mint, l.protocol, l.quote_mint, l.creator, \
      l.creation_slot, l.creation_time, l.known_at, l.attributes, \
      (cp.attributes->>'risk_score')::float8 AS creator_risk_score";
-const RADAR_ROW_JOIN: &str =
-    "LEFT JOIN pumphound.creator_profiles cp ON cp.creator = l.creator";
+const RADAR_ROW_JOIN: &str = "LEFT JOIN pumphound.creator_profiles cp ON cp.creator = l.creator";
 
 /// Builds one RadarRow from a `pumphound.launches` row (selecting RADAR_ROW_COLUMNS) plus the
 /// live in-memory market/window state. Shared by the REST snapshot (`GET /launches`) and the
@@ -1409,18 +1409,51 @@ async fn add_executable_marks(s: &AppState, view: &mut Value) {
             policy_version: "mark-only".into(),
             decision_id: Uuid::nil(),
         };
-        let Ok(mark) = quote_order(&request, &snapshot) else {
-            position["mark_status"] = json!("UNMARKABLE");
-            continue;
-        };
-        let Ok(mark_atomic) = i128::try_from(mark.expected_output.atomic.0) else {
-            continue;
+        // Preferred: Execution Twin liquidation mark — "sell the whole position now, after exact
+        // protocol fees and modeled network cost". Falls back to the legacy quote engine only
+        // when the twin refuses the state, and says so.
+        let fee_env = crate::execution_twin_bridge::current_fee_environment(s).await;
+        let twin_mark = u64::try_from(base_atomic).ok().and_then(|base| {
+            pumphound_execution_twin::mark::executable_mark(
+                &snapshot,
+                base,
+                &fee_env,
+                pumphound_execution_twin::network::PriorityFeePolicy::P50,
+                pumphound_execution_twin::contract::JitoScenario::NoJito,
+            )
+            .ok()
+        });
+        let (mark_atomic, snapshot_id, status) = match twin_mark {
+            Some(m) => {
+                position["theoretical_mark_quote_atomic"] = json!(m.theoretical_quote.to_string());
+                position["liquidation_impact_bps"] = json!(m.liquidation_impact_bps);
+                position["liquidation_cost_quote_atomic"] =
+                    json!(m.liquidation_cost_quote.to_string());
+                position["mark_protocol_fees_quote_atomic"] =
+                    json!(m.protocol_fees_quote.to_string());
+                position["mark_network_cost_lamports"] = json!(m.network_cost_lamports.to_string());
+                position["mark_simulator_version"] = json!(m.simulator_version);
+                (m.executable_quote as i128, m.market_snapshot_id, "EXECUTABLE")
+            }
+            None => {
+                let Ok(mark) = quote_order(&request, &snapshot) else {
+                    position["mark_status"] = json!("UNMARKABLE");
+                    continue;
+                };
+                let Ok(mark_atomic) = i128::try_from(mark.expected_output.atomic.0) else {
+                    continue;
+                };
+                position["mark_simulator_version"] = json!(pumphound_paper_core::SIMULATOR_LEGACY);
+                (mark_atomic, mark.market_snapshot_id, "EXECUTABLE_LEGACY_QUOTE")
+            }
         };
         let unrealized = mark_atomic - cost_atomic;
-        position["executable_mark_quote_atomic"] = json!(mark.expected_output.atomic.0.to_string());
+        position["executable_mark_quote_atomic"] = json!(mark_atomic.to_string());
+        // Field the Portfolio desk already reads for "Current value".
+        position["executable_exit_quote_atomic"] = json!(mark_atomic.to_string());
         position["unrealized_pnl_quote_atomic"] = json!(unrealized.to_string());
-        position["mark_snapshot_id"] = json!(mark.market_snapshot_id);
-        position["mark_status"] = json!("EXECUTABLE");
+        position["mark_snapshot_id"] = json!(snapshot_id);
+        position["mark_status"] = json!(status);
         *totals.entry(quote_mint.to_string()).or_default() += unrealized;
     }
     view["pnl"]["unrealized_by_quote_mint"] = json!(totals
@@ -2321,8 +2354,7 @@ async fn launch_investigations(
     State(s): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    match crate::investigator::list_investigations_for_subject(&s.stores, "launch", &id, 10).await
-    {
+    match crate::investigator::list_investigations_for_subject(&s.stores, "launch", &id, 10).await {
         Ok(items) => Json(json!({ "items": items })).into_response(),
         Err(error) => internal_error_response(error),
     }

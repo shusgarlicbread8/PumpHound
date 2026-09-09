@@ -1502,12 +1502,14 @@ dependencies = [
  "anyhow",
  "async-nats",
  "axum",
+ "base64",
  "chrono",
  "clickhouse",
  "futures",
  "pumphound-api-contract",
  "pumphound-chain-source",
  "pumphound-domain",
+ "pumphound-execution-twin",
  "pumphound-feature-core",
  "pumphound-market-state",
  "pumphound-paper-core",
@@ -1542,10 +1544,13 @@ dependencies = [
 name = "pumphound-execution-twin"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "bs58",
  "chrono",
  "curve25519-dalek",
+ "hex",
  "pumphound-domain",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",
@@ -1852,7 +1857,9 @@ checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
  "base64",
  "bytes",
+ "futures-channel",
  "futures-core",
+ "futures-util",
  "http",
  "http-body",
  "http-body-util",

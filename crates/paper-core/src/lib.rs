@@ -1,15 +1,19 @@
 mod autonomous;
+mod execution_edge;
 mod fees;
 mod learning;
 mod policy;
 mod quote;
 mod research;
 mod risk;
+mod tail;
 
 pub use autonomous::*;
+pub use execution_edge::*;
 pub use learning::*;
 pub use policy::*;
 pub use research::*;
+pub use tail::*;
 
 pub use fees::*;
 pub use quote::*;
