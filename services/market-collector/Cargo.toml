@@ -1,0 +1,28 @@
+[package]
+name = "pumphound-market-collector"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pumphound-market-collector"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+pumphound-hyperliquid-research.workspace = true
+pumphound-hyperliquid-twin.workspace = true
+pumphound-storage.workspace = true
+pumphound-venue-core.workspace = true
+pumphound-venue-hyperliquid.workspace = true
+pumphound-venue-ostium.workspace = true
+pumphound-venue-polymarket.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
