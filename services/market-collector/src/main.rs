@@ -85,6 +85,9 @@ async fn main() -> anyhow::Result<()> {
     });
 
     loop {
+        if let Err(error) = store::prune_high_frequency(&stores).await {
+            error!(?error, "retention prune");
+        }
         if let Err(error) = store::refresh_storage_stats(&stores).await {
             error!(?error, "storage stats");
         }

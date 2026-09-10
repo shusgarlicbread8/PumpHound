@@ -86,23 +86,25 @@ pub async fn tick(stores: &Stores) -> anyhow::Result<()> {
             .ok()
             .and_then(|v| v.as_str().map(str::to_string))
             .unwrap_or_else(|| "DISCOVERED".into());
-        store::insert_hl_quote(
-            stores,
-            &inst.coin,
-            None,
-            inst.mark,
-            inst.mid,
-            inst.oracle,
-            inst.funding,
-            inst.open_interest,
-            inst.premium,
-            inst.day_notional_volume,
-            spread,
-            inst.impact_bid,
-            inst.impact_ask,
-            &life_s,
-        )
-        .await?;
+        if inst.class == HipClass::Hip3 || n % 3 == 0 {
+            store::insert_hl_quote(
+                stores,
+                &inst.coin,
+                None,
+                inst.mark,
+                inst.mid,
+                inst.oracle,
+                inst.funding,
+                inst.open_interest,
+                inst.premium,
+                inst.day_notional_volume,
+                spread,
+                inst.impact_bid,
+                inst.impact_ask,
+                &life_s,
+            )
+            .await?;
+        }
         store::insert_lifecycle(
             stores,
             &inst.coin,

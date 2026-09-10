@@ -535,6 +535,28 @@ pub async fn upsert_relation(
     Ok(())
 }
 
+pub async fn prune_high_frequency(stores: &Stores) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM pumphound.hl_quotes WHERE observed_at < now() - interval '24 hours'")
+        .execute(&stores.postgres)
+        .await?;
+    sqlx::query("DELETE FROM pumphound.hl_l2_snapshots WHERE observed_at < now() - interval '24 hours'")
+        .execute(&stores.postgres)
+        .await?;
+    sqlx::query("DELETE FROM pumphound.hl_predicted_fundings WHERE observed_at < now() - interval '6 hours'")
+        .execute(&stores.postgres)
+        .await?;
+    sqlx::query("DELETE FROM pumphound.hl_trades WHERE source_ts < now() - interval '7 days'")
+        .execute(&stores.postgres)
+        .await?;
+    sqlx::query("DELETE FROM pumphound.ostium_observations WHERE observed_at < now() - interval '7 days'")
+        .execute(&stores.postgres)
+        .await?;
+    sqlx::query("DELETE FROM pumphound.prediction_books WHERE observed_at < now() - interval '7 days'")
+        .execute(&stores.postgres)
+        .await?;
+    Ok(())
+}
+
 pub async fn refresh_storage_stats(stores: &Stores) -> anyhow::Result<()> {
     let specs = [
         (
@@ -553,12 +575,12 @@ pub async fn refresh_storage_stats(stores: &Stores) -> anyhow::Result<()> {
                 "hl_lifecycle",
                 "venue_instruments",
             ],
-            "postgres quotes/lifecycle + 14d clickhouse venue_observations",
+            "quotes/L2 24h; predicted funding 6h; trades 7d; clickhouse observations 14d",
         ),
         (
             "ostium",
             vec!["ostium_markets", "ostium_observations"],
-            "bounded pair snapshots; no sim tape yet",
+            "pair snapshots 7d; identity kept; no sim tape yet",
         ),
         (
             "polymarket",
@@ -568,7 +590,7 @@ pub async fn refresh_storage_stats(stores: &Stores) -> anyhow::Result<()> {
                 "prediction_books",
                 "prediction_relations",
             ],
-            "gamma identity + sampled CLOB books",
+            "gamma identity kept; CLOB books 7d",
         ),
     ];
     for (venue, tables, policy) in specs {
