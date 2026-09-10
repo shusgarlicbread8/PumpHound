@@ -49,6 +49,34 @@ fn sample_status(n: usize) -> &'static str {
         "SUFFICIENT"
     }
 }
+/// Hours until this book's closed-trade count reaches the next sample_status threshold (30 for
+/// INSUFFICIENT, 100 for EARLY), estimated from actual recent throughput rather than a fixed
+/// guess. Recency window is the shorter of 6 hours or the book's whole lifetime, so a book only
+/// a few minutes old doesn't extrapolate a wild rate from one or two trades; that case (and a
+/// currently-zero rate) reports `None` rather than an infinite or fabricated ETA.
+fn sample_eta_hours(closed: usize, closed_ats: &[DateTime<Utc>], book_started_at: DateTime<Utc>) -> Option<f64> {
+    let target = if closed < 30 {
+        30
+    } else if closed < 100 {
+        100
+    } else {
+        return None;
+    };
+    let now = Utc::now();
+    let lifetime_hours = (now - book_started_at).num_seconds() as f64 / 3600.0;
+    let window_hours = lifetime_hours.min(6.0);
+    if window_hours < 0.25 {
+        return None;
+    }
+    let window_start = now - chrono::Duration::milliseconds((window_hours * 3_600_000.0) as i64);
+    let recent = closed_ats.iter().filter(|t| **t >= window_start).count();
+    let rate_per_hour = recent as f64 / window_hours;
+    if rate_per_hour <= 0.0 {
+        return None;
+    }
+    Some((target - closed) as f64 / rate_per_hour)
+}
+
 fn edge_status(n: usize, net: i128) -> &'static str {
     if n >= 30 && net < 0 {
         "NEGATIVE"
@@ -159,6 +187,7 @@ pub async fn strategy_reports(stores: &Stores) -> anyhow::Result<Value> {
         let closed_lots = sqlx::query(
             r#"SELECT l.lot_id::text,
               SUM(c.realized_pnl_atomic)::text AS realized_pnl_atomic,
+              MAX(sf.arrival_at) AS closed_at,
               EXTRACT(EPOCH FROM(MAX(sf.arrival_at)-l.acquired_at))::double precision AS hold_seconds
             FROM pumphound.acquisition_lots l
             JOIN pumphound.paper_fills bf ON bf.fill_id=l.fill_id
@@ -195,7 +224,13 @@ pub async fn strategy_reports(stores: &Stores) -> anyhow::Result<Value> {
             .iter()
             .filter_map(|lot| lot.get::<Option<f64>, _>("hold_seconds"))
             .collect::<Vec<_>>();
+        let closed_ats = closed_lots
+            .iter()
+            .filter_map(|lot| lot.get::<Option<DateTime<Utc>>, _>("closed_at"))
+            .collect::<Vec<_>>();
         let closed = closed_lots.len();
+        let eta_hours_to_next_sample_threshold =
+            sample_eta_hours(closed, &closed_ats, book.get::<DateTime<Utc>, _>("created_at"));
         let closed_net: i128 = closed_pnls.iter().sum();
         let winners: Vec<i128> = closed_pnls.iter().copied().filter(|p| *p > 0).collect();
         let losers: Vec<i128> = closed_pnls.iter().copied().filter(|p| *p < 0).collect();
@@ -454,7 +489,9 @@ pub async fn strategy_reports(stores: &Stores) -> anyhow::Result<Value> {
           },
           "execution":execution,"simulator_version":simulator_version,
           "position_sizing":manifest.get("position_sizing"),"fee_model_version":manifest.get("fee_model_version"),"audit_caveats":caveats,
-          "sample_warning":(closed<100).then(||format!("{}; N={closed}",sample_status(closed))),"experiment_id":manifest.get("experiment_id"),"fabricated":false
+          "sample_warning":(closed<100).then(||format!("{}; N={closed}",sample_status(closed))),"experiment_id":manifest.get("experiment_id"),"fabricated":false,
+          "eta_hours_to_next_sample_threshold":eta_hours_to_next_sample_threshold,
+          "eta_basis":"observed closed-trade rate over the last 6h (or book lifetime if younger); null when the book is too new or too quiet to extrapolate, never a guess"
         });
         items.push(json!({"report_id":format!("ledger-{id}"),"simulation_run_id":id,"book_id":id,
           "portfolio_id":book.get::<Uuid,_>("portfolio_id"),"strategy_key":strategy,
@@ -471,7 +508,8 @@ pub async fn strategy_reports(stores: &Stores) -> anyhow::Result<Value> {
           "top1_share_of_profit":report["tail"]["top1_share_of_profit"],"headline_depends_on_largest_winner":report["tail"]["headline_depends_on_largest_winner"],
           "fill_rate":report["execution"]["fill_rate"],"execution_drag_sol_per_fill":report["execution"]["execution_drag_sol_per_fill"],
           "closed_trades":closed,"open_positions":open,"trades":orders_n,"net_pnl":report["net_pnl"],"expectancy":report["expectancy"],"max_drawdown":report["max_drawdown"],"win_rate":report["win_rate"],"status":report["status"],
-          "sample_status":report["sample_status"],"edge_status":report["edge_status"],"authority":authority,"financial_units":report["financial_units"],"report":report}));
+          "sample_status":report["sample_status"],"edge_status":report["edge_status"],"authority":authority,"financial_units":report["financial_units"],
+          "eta_hours_to_next_sample_threshold":eta_hours_to_next_sample_threshold,"report":report}));
     }
     Ok(
         json!({"items":items,"scope":{"books":"ALL_ACTIVE_BOOKS","window":"ALL_TIME","active_definition":"running simulation run; unarchived portfolio; strategy in manifest","closed_n":"fully FIFO-consumed SOL acquisition lots; one entry fill lot per realized trade","open_positions":"aggregate book/mint holdings","net_pnl":"realized SOL position P&L including partial exits"},"as_of":Utc::now(),"fabricated":false}),

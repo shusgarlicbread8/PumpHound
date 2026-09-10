@@ -191,7 +191,7 @@ fn decode_one(
             let bonding_curve = c.pubkey()?;
             let _ = c.i64()?;
             let pool = c.pubkey()?;
-            let quote_mint = c.pubkey()?;
+            let quote_mint = normalize_quote_mint(c.pubkey()?);
             require_consumed(&c, "migration event")?;
             Ok(Some(wrap(
                 tx,
@@ -259,7 +259,7 @@ fn decode_create(
         let token_program = c.pubkey()?;
         let is_mayhem = c.bool()?;
         let is_cashback = c.bool()?;
-        let quote_mint = c.pubkey()?;
+        let quote_mint = normalize_quote_mint(c.pubkey()?);
         let virtual_quote = c.atomic_u64()?;
         require_consumed(&c, "create event")?;
         LaunchCreated {
@@ -398,7 +398,7 @@ fn decode_trade(
     let _ = c.u64()?;
     let buyback = c.atomic_u64()?;
     let _ = c.skip_vec_pubkey_u16()?;
-    let quote_mint = c.pubkey()?;
+    let quote_mint = normalize_quote_mint(c.pubkey()?);
     let quote_amount = c.atomic_u64()?;
     let v_quote = c.atomic_u64()?;
     let r_quote = c.atomic_u64()?;
@@ -524,6 +524,28 @@ fn fee_comp(kind: FeeKind, mint: Pubkey, amount: Atomic, decimals: u8) -> FeeCom
         },
         schedule_version: DECODER_VERSION.to_string(),
         charged_on_failure: false,
+    }
+}
+
+/// The extended Create/Trade/Migrate event layouts added an explicit `quote_mint` field for
+/// launches priced against something other than native SOL (USDC, PUMP, ...). For the ordinary
+/// SOL-denominated bonding curve, pump.fun's own program leaves that field as `Pubkey::default()`
+/// (32 zero bytes, which base58-encodes to the System Program address) rather than filling in
+/// WSOL's real mint — the same "zero means: use the SOL-denominated fields instead" convention
+/// already handled for `virtual_quote_reserves`/`quote_amount` (see the `is_zero()` fallbacks to
+/// `virtual_sol`/`sol_amount` beside each call site below). Confirmed by field-order cross-check
+/// against `vendor/pump-idl/pump.json`'s CreateEvent/TradeEvent/CompletePumpAmmMigrationEvent: the
+/// borsh layout is read correctly end-to-end (every field after this one decodes to sane values),
+/// so an unmapped zero pubkey here was this code failing to apply its own established convention
+/// to `quote_mint`, not a misaligned read. Without this, every default-SOL-curve launch under the
+/// extended layout stored `quote_mint = "111...111"`, which is neither WSOL nor a valid asset row
+/// a price/decimals lookup can resolve — that is what left Radar's Price/MC columns blank for the
+/// majority of tracked launches.
+fn normalize_quote_mint(mint: Pubkey) -> Pubkey {
+    if mint == Pubkey([0u8; 32]) {
+        Pubkey::from_base58(pumphound_domain::WSOL_MINT).expect("static WSOL mint")
+    } else {
+        mint
     }
 }
 
@@ -856,5 +878,18 @@ mod tests {
         let events = PumpBondingCurveDecoder::default().decode(&tx).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_index, 1);
+    }
+
+    #[test]
+    fn zero_pubkey_quote_mint_normalizes_to_wsol() {
+        let zero = Pubkey([0u8; 32]);
+        let wsol = Pubkey::from_base58(pumphound_domain::WSOL_MINT).unwrap();
+        assert_eq!(normalize_quote_mint(zero), wsol);
+    }
+
+    #[test]
+    fn non_zero_quote_mint_passes_through_unchanged() {
+        let usdc = Pubkey::from_base58(pumphound_domain::USDC_MINT).unwrap();
+        assert_eq!(normalize_quote_mint(usdc), usdc);
     }
 }

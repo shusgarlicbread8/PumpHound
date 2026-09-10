@@ -455,16 +455,39 @@ function PortfolioPositionLink({
 }
 
 function WalletSnippet({ graph, mint }: { graph: GraphResponse | undefined; mint: string }) {
+  const cluster = useQuery({
+    queryKey: ["funding-cluster", mint],
+    queryFn: () => api.mintFundingCluster(mint),
+    enabled: Boolean(mint),
+  });
+  const clusterData = asRecord(cluster.data);
   const wallets = (graph?.nodes ?? []).filter((node) => node.kind === "wallet" || node.id.startsWith("wallet:"));
+  const clusterPanel = (
+    <div className="mb-3 border border-hairline p-2 text-label">
+      <div className="label">First-10 funding cluster</div>
+      <p className="text-muted">{asString(clusterData.note, "Observed buyer structure. Null funders are unknown, not zero.")}</p>
+      <div className="mt-1 grid grid-cols-2 gap-2 font-mono md:grid-cols-4">
+        <div>first10 {asString(clusterData.first10_count, "UNKNOWN")}</div>
+        <div>same-slot share {asString(clusterData.same_slot_first10_share, "UNKNOWN")}</div>
+        <div>same-funder count {asString(clusterData.same_funder_first10_count, "UNKNOWN")}</div>
+        <div>status {asString(clusterData.evidence_status, "UNKNOWN")}</div>
+      </div>
+    </div>
+  );
   if (!wallets.length) {
     return (
-      <EmptyState
-        title="No wallet evidence"
-        reason={`Graph for ${mint} has no wallet nodes yet. Hot-set tracking increases identity coverage when a book selects the token.`}
-      />
+      <div>
+        {clusterPanel}
+        <EmptyState
+          title="No wallet evidence"
+          reason={`Graph for ${mint} has no wallet nodes yet. Hot-set tracking increases identity coverage when a book selects the token.`}
+        />
+      </div>
     );
   }
   return (
+    <div>
+    {clusterPanel}
     <table className="w-full text-left text-label">
       <thead className="text-muted">
         <tr>
@@ -481,6 +504,7 @@ function WalletSnippet({ graph, mint }: { graph: GraphResponse | undefined; mint
         ))}
       </tbody>
     </table>
+    </div>
   );
 }
 

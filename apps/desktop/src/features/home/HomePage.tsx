@@ -68,6 +68,12 @@ export function HomePage() {
       {asArray<string>(ready.reasons).length ? (
         <p className="mb-3 text-label text-negative">{asArray<string>(ready.reasons).join(" · ")}</p>
       ) : null}
+      <p className="mb-3 border border-hairline bg-surface1 px-2 py-1.5 text-label">
+        <span className="text-amber">Picker thesis.</span> New capital goes to EXEC-SELECT-V1 on the Execution Twin
+        (20–90s confirmed-early ablation, plus labelled fast-scout and survivor windows). Frozen books keep running as
+        controls. Research answers whether filtering losers beats predicting winners.{" "}
+        <Link to="/research" className="text-info">Open the selection lab</Link>
+      </p>
 
       <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-6">
         <Kpi k="Open positions · all active books" v={asString(portfolio.open_positions, "UNKNOWN")} href="/trade?tab=positions&state=open&window=all" />
@@ -96,35 +102,7 @@ export function HomePage() {
           {strategies.length === 0 ? (
             <EmptyState title="No strategy books" reason="Reports appear after paper desks exist." />
           ) : (
-            <table className="w-full text-left text-label">
-              <thead className="text-muted">
-                <tr>
-                  <th className="px-2 py-1 font-normal">Book</th>
-                  <th className="px-2 py-1 font-normal">N</th>
-                  <th className="px-2 py-1 font-normal">P&L</th>
-                  <th className="px-2 py-1 font-normal">ex-largest</th>
-                  <th className="px-2 py-1 font-normal">Top-1 share</th>
-                  <th className="px-2 py-1 font-normal">Sim</th>
-                  <th className="px-2 py-1 font-normal">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {strategies.slice(0, 8).map((row, i) => {
-                  const metrics = strategyMetrics(row);
-                  return (
-                    <tr key={asString(metrics.key, String(i))} className="border-t border-hairline">
-                      <td className="px-2 py-1 font-mono"><a className="text-info" href={`/strategies#book-${metrics.bookId}`}>{metrics.key}</a></td>
-                      <td className="px-2 py-1 tabular-nums">{metrics.closed ?? "UNKNOWN"}</td>
-                      <td className="px-2 py-1 font-mono">{metrics.netPnlDisplay}</td>
-                      <td className={`px-2 py-1 font-mono${metrics.headlineDependsOnLargest ? " text-amber" : ""}`}>{metrics.netExLargestDisplay}</td>
-                      <td className="px-2 py-1 font-mono">{metrics.top1ShareDisplay}</td>
-                      <td className="px-2 py-1 text-muted">{metrics.simulatorVersion.startsWith("execution-twin") ? "TWIN" : "LEGACY"}</td>
-                      <td className="px-2 py-1 text-amber">{metrics.sample} · {metrics.edge}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <ArenaTables strategies={strategies} />
           )}
         </section>
 
@@ -224,6 +202,62 @@ export function HomePage() {
           )}
         </section>
       </div>
+    </div>
+  );
+}
+
+function isPickerBook(metrics: ReturnType<typeof strategyMetrics>) {
+  return metrics.experimentId === "EXEC-SELECT-V1" || metrics.key.endsWith("_SELECT_V1") || metrics.key === "LOSS_FILTER_V1" || metrics.key === "MARKET_CONFIRMED_V1" || metrics.key === "FAST_SCOUT_V1" || metrics.key === "SURVIVOR_PICKER_V1";
+}
+
+function ArenaTables({ strategies }: { strategies: unknown[] }) {
+  const rows = strategies.map(strategyMetrics);
+  const picker = rows.filter(isPickerBook);
+  const rest = rows.filter((row) => !isPickerBook(row)).slice(0, 8);
+  return (
+    <div>
+      {picker.length ? (
+        <ArenaTable title="Picker · EXEC-SELECT-V1 (Execution Twin)" rows={picker} />
+      ) : (
+        <p className="px-2 py-1.5 text-label text-muted">
+          EXEC-SELECT desks appear after core-api restarts against a healthy Postgres.
+        </p>
+      )}
+      {rest.length ? <ArenaTable title="Controls · frozen / other books" rows={rest} /> : null}
+    </div>
+  );
+}
+
+function ArenaTable({ title, rows }: { title: string; rows: ReturnType<typeof strategyMetrics>[] }) {
+  return (
+    <div>
+      <div className="border-b border-hairline px-2 py-1 text-label text-muted">{title}</div>
+      <table className="w-full text-left text-label">
+        <thead className="text-muted">
+          <tr>
+            <th className="px-2 py-1 font-normal">Book</th>
+            <th className="px-2 py-1 font-normal">N</th>
+            <th className="px-2 py-1 font-normal">P&L</th>
+            <th className="px-2 py-1 font-normal">ex-largest</th>
+            <th className="px-2 py-1 font-normal">Top-1 share</th>
+            <th className="px-2 py-1 font-normal">Sim</th>
+            <th className="px-2 py-1 font-normal">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((metrics, i) => (
+            <tr key={asString(metrics.key, String(i))} className="border-t border-hairline">
+              <td className="px-2 py-1 font-mono"><a className="text-info" href={`/strategies#book-${metrics.bookId}`}>{metrics.key}</a></td>
+              <td className="px-2 py-1 tabular-nums">{metrics.closed ?? "UNKNOWN"}</td>
+              <td className="px-2 py-1 font-mono">{metrics.netPnlDisplay}</td>
+              <td className={`px-2 py-1 font-mono${metrics.headlineDependsOnLargest ? " text-amber" : ""}`}>{metrics.netExLargestDisplay}</td>
+              <td className="px-2 py-1 font-mono">{metrics.top1ShareDisplay}</td>
+              <td className="px-2 py-1 text-muted">{metrics.simulatorVersion.startsWith("execution-twin") ? "TWIN" : "LEGACY"}</td>
+              <td className="px-2 py-1 text-amber">{metrics.sample} · {metrics.edge}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

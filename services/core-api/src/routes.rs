@@ -58,6 +58,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/v1/wallets/{address}", get(wallet))
         .route("/api/v1/wallets/{address}/activity", get(wallet_activity))
         .route("/api/v1/wallets/{address}/funding", get(wallet_funding))
+        .route("/api/v1/mints/{mint}/funding-cluster", get(mint_funding_cluster))
         .route("/api/v1/creators", get(creators_index))
         .route("/api/v1/creators/{address}", get(creator))
         .route(
@@ -90,6 +91,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/v1/research/timing", get(research_timing))
         .route("/api/v1/research/models", get(research_models))
         .route("/api/v1/research/policies", get(research_policies))
+        .route("/api/v1/research/strategy-diff", get(research_strategy_diff))
+        .route("/api/v1/research/selection-forensics", get(research_selection_forensics))
+        .route("/api/v1/research/exec-select", get(research_exec_select))
+        .route("/api/v1/research/strategy-catalog", get(research_strategy_catalog))
         .route(
             "/api/v1/research/models/{version}/promote",
             post(promote_paper_model),
@@ -931,6 +936,22 @@ async fn wallet_funding(
     Json(crate::intelligence::funding_response(&s.stores, &address).await)
 }
 
+async fn mint_funding_cluster(
+    State(s): State<Arc<AppState>>,
+    Path(mint): Path<String>,
+) -> Json<Value> {
+    let creator = sqlx::query_scalar::<_, String>(
+        "SELECT creator FROM pumphound.launches WHERE mint=$1 ORDER BY known_at DESC LIMIT 1",
+    )
+    .bind(&mint)
+    .fetch_optional(&s.stores.postgres)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_default();
+    Json(crate::intelligence::funding_cluster_for_mint(&s.stores, &mint, &creator, i64::MAX).await)
+}
+
 async fn creator(State(s): State<Arc<AppState>>, Path(address): Path<String>) -> Json<Value> {
     let rows = sqlx::query(
         "SELECT launch_id::text, mint, protocol, creation_slot, creation_time FROM pumphound.launches WHERE creator=$1 ORDER BY creation_slot DESC LIMIT 100",
@@ -1605,6 +1626,51 @@ async fn research_policies(
         "policies": report.get("policies").cloned().unwrap_or_else(|| json!({})),
         "fabricated": false
     }))
+}
+
+#[derive(Deserialize)]
+struct StrategyDiffQuery {
+    a: Option<String>,
+    b: Option<String>,
+}
+
+async fn research_strategy_diff(Query(query): Query<StrategyDiffQuery>) -> Json<Value> {
+    let a = query.a.unwrap_or_else(|| "RANDOM_SELECT_V1".into());
+    let b = query.b.unwrap_or_else(|| "MARKET_CONFIRMED_V1".into());
+    Json(crate::research_select::strategy_diff_value(&a, &b).await)
+}
+
+async fn research_strategy_catalog() -> Json<Value> {
+    Json(crate::research_select::catalog_value())
+}
+
+async fn research_selection_forensics(State(s): State<Arc<AppState>>) -> Json<Value> {
+    Json(
+        crate::research_select::selection_forensics(&s)
+            .await
+            .unwrap_or_else(|error| {
+                json!({
+                    "status": "UNAVAILABLE",
+                    "error": error.to_string(),
+                    "fabricated": false
+                })
+            }),
+    )
+}
+
+async fn research_exec_select(State(s): State<Arc<AppState>>) -> Json<Value> {
+    Json(
+        crate::research_select::exec_select_board(&s)
+            .await
+            .unwrap_or_else(|error| {
+                json!({
+                    "experiment_id": "EXEC-SELECT-V1",
+                    "status": "UNAVAILABLE",
+                    "error": error.to_string(),
+                    "fabricated": false
+                })
+            }),
+    )
 }
 
 fn learning_experiment_id(requested: Option<String>) -> String {

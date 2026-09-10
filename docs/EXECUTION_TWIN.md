@@ -112,3 +112,15 @@ Surfpool is offline verification. It is never on the live path; when it is not c
   sweep of what other sellers would do at the same time.
 - Positions in PumpSwap pools that have gone cold cannot be rehydrated yet and stay open with an
   explicit reason (`rehydrate_unsupported_pumpswap`).
+- **ATA rent is never reclaimed.** `builder.rs` only ever builds `CreateAccountIdempotent` (on
+  the entry that opens a new position); no `CloseAccount` is built on any exit, so the twin never
+  credits back the ~0.00204 SOL rent-exemption deposit a real trader could reclaim by closing the
+  emptied token account. Settled by direct code inspection on 2026-09-09: this is not a missing
+  fee-side credit sitting next to correct debits, it is a genuinely unmodeled instruction. That
+  makes the twin's per-trade cost a pessimistic upper bound, not a bug — many real bots never
+  bother closing empty ATAs either, so "rent never comes back" is a legitimate scenario, just not
+  the only one. Whether to add reclaim modeling is a product decision (what fraction of exits
+  would a real strategy actually bother closing?), not a pure fix, so it's tracked here rather
+  than silently assumed either way. Until then, size positions well above the rent floor
+  (`crates/paper-core/src/execution_edge.rs::EXECUTION_EDGE_ENTRY_ATOMIC`) rather than relying on
+  reclaim to make small trades' economics work.

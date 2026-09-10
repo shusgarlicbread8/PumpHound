@@ -186,6 +186,12 @@ export const api = {
   researchTimelines: () => apiGet<Record<string, unknown>>("/research/timelines"),
   researchLearning: (experimentId = "ALPHA-LEARN") =>
     apiGet<ResearchLearningResponse>("/research/learning", { experiment_id: experimentId }),
+  researchStrategyDiff: (a: string, b: string) =>
+    apiGet<Record<string, unknown>>("/research/strategy-diff", { a, b }),
+  researchSelectionForensics: () => apiGet<Record<string, unknown>>("/research/selection-forensics"),
+  researchExecSelect: () => apiGet<Record<string, unknown>>("/research/exec-select"),
+  mintFundingCluster: (mint: string) =>
+    apiGet<Record<string, unknown>>(`/mints/${encodeURIComponent(mint)}/funding-cluster`),
   watchlists: () => apiGet<{ items: Watchlist[] }>("/watchlists"),
   createWatchlist: (name: string) => apiSend<Watchlist>("/watchlists", "POST", { name }),
   addWatch: (id: string, subject: string) =>

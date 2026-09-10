@@ -1,4 +1,5 @@
 mod autonomous;
+mod exec_select;
 mod execution_edge;
 mod fees;
 mod learning;
@@ -6,13 +7,16 @@ mod policy;
 mod quote;
 mod research;
 mod risk;
+mod strategy_diff;
 mod tail;
 
 pub use autonomous::*;
+pub use exec_select::*;
 pub use execution_edge::*;
 pub use learning::*;
 pub use policy::*;
 pub use research::*;
+pub use strategy_diff::*;
 pub use tail::*;
 
 pub use fees::*;

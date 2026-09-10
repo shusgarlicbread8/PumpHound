@@ -22,6 +22,19 @@ Honest list as of 2026-09-07. This is not a complete product.
 - Websocket `/api/v1/stream` exists with subscribe/heartbeat. Resume-buffer expiry and `resync_required` are incomplete.
 - Metadata SSRF protections specified in the operations spec are not implemented (no fetcher yet).
 
+## EXEC-SELECT / picker mode (2026-09-10)
+
+- New books (`RANDOM_SELECT_V1`, `MARKET_CONFIRMED_V1`, `LOSS_FILTER_V1`, `IV_SELECT_V1`,
+  `FAST_SCOUT_V1`, `SURVIVOR_PICKER_V1`) trade only through Execution Twin. Frozen ALPHA-LEARN /
+  ALPHA-LOOP / EXECUTION-EDGE books are unchanged.
+- Confirmed-early (20–90s) is the matched ablation. Fast scout and survivor share fees/size/sim
+  but not the observation window — Strategy Diff marks those pairs `CONFOUNDED`.
+- Funding clusters report observed first-10 structure. `same_funder_*` stays UNKNOWN until a
+  `funding_edges` row exists. The Helius funded-by adapter is still not entitled.
+- Continuous risk exits (`HOLDER_CONCENTRATION_SPIKE`, `COHORT_EXIT`, `CREATOR_TRANSFER`) apply only to EXEC-SELECT. `CREATOR_TRANSFER` is a creator-risk deterioration proxy, not a decoded creator token transfer.
+- Post-cost ML labels and rankers are not trained yet. EXEC-SELECT is the experiment that will
+  generate those labels.
+
 ## Execution Twin (2026-09-09)
 
 - Legacy paper books (ALPHA-LEARN, RANDOM_CONTROL_V1, LIVE_PAPER_*) remain on `legacy-paper-v1`:

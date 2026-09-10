@@ -35,6 +35,7 @@ export function StrategiesPage() {
                 <div className="mt-2 grid grid-cols-2 gap-2 text-label md:grid-cols-6">
                   <Metric k="N closed" v={metrics.closed == null ? "UNKNOWN" : String(metrics.closed)} />
                   <Metric k="N open" v={metrics.open == null ? "UNKNOWN" : String(metrics.open)} />
+                  <Metric k="Sample ETA" v={metrics.etaDisplay} />
                   <Metric k="Gross P&L" v={metrics.grossPnlDisplay} />
                   <Metric k="Fees" v={metrics.feesDisplay} />
                   <Metric k="Net P&L" v={metrics.netPnlDisplay} />

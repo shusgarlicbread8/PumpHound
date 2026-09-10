@@ -1,9 +1,22 @@
 //! EXECUTION-EDGE-V1 experiment family: books that trade through the high-fidelity Execution
 //! Twin instead of the legacy paper simulator. Frozen ALPHA-LEARN books are untouched; the
 //! RANDOM_EXECUTION_CONTROL book deliberately reuses the RANDOM_CONTROL selection (same seed,
-//! same rate, same fixed size, same hold) so the two books form a matched pair whose ONLY
-//! difference is the execution simulator. That pair answers: "does the legacy headline survive
-//! realistic execution?"
+//! same rate, same hold) as its legacy counterpart so the two books form a matched pair for
+//! selection logic. That pair answers: "does the legacy headline survive realistic execution?"
+//!
+//! Entry SIZE is the one deliberate exception to "matched pair, only the simulator differs":
+//! both twin books were inheriting RANDOM_CONTROL_V1's live `fixed_sol_atomic` (0.005 SOL) via
+//! the shared `control_policy` used for eligibility gates. At that size, a real Solana
+//! transaction's fixed costs are not noise around a signal — they ARE the signal. The dominant
+//! one-time cost checked live on 2026-09-09 was a single Associated Token Account's rent
+//! (~0.00204 SOL, essentially fixed regardless of trade size): ~42% of every entry, clustered
+//! within a few bps across every trade, i.e. almost no dataset variance came from strategy
+//! quality at all. `EXECUTION_EDGE_ENTRY_ATOMIC` overrides just the twin path's entry amount
+//! (`paper_loop.rs`, right after `heuristic_entry_request`) so post-cost labels measure
+//! execution and selection quality instead of a rent-driven floor. RANDOM_CONTROL_V1's own
+//! legacy-simulator size is untouched — this repo's rule is "don't mutate existing books," and
+//! that book's own continuity matters more than preserving an exact-size pairing that was
+//! producing an unusable signal-to-noise ratio anyway.
 
 use crate::{OpportunityAction, OpportunityDecision, StrategyBook};
 use serde_json::Value;
@@ -16,7 +29,13 @@ pub const SIMULATOR_LEGACY: &str = "legacy-paper-v1";
 /// Must equal `pumphound_execution_twin::SIMULATOR_VERSION`; asserted in core-api tests.
 pub const SIMULATOR_EXECUTION_TWIN: &str = "execution-twin-v1.0.0";
 
-const EXECUTION_EDGE_CAPITAL_ATOMIC: i128 = 2_000_000_000;
+pub const EXECUTION_EDGE_CAPITAL_ATOMIC: i128 = 2_000_000_000;
+
+/// 0.5 SOL: ~245x the observed ~0.00204 SOL ATA-rent floor, so rent reads as a rounding error
+/// (~0.4%) rather than ~42% of the trade. Applies to both EXECUTION-EDGE-V1 books' entries only
+/// (see module doc). Not a claim that 0.5 SOL is the "right" live size — just large enough that
+/// Solana's near-fixed per-transaction costs stop dominating the post-cost dataset's variance.
+pub const EXECUTION_EDGE_ENTRY_ATOMIC: u128 = 500_000_000;
 
 pub const RANDOM_EXECUTION_CONTROL_BOOK: StrategyBook = StrategyBook {
     key: STRATEGY_RANDOM_EXECUTION_CONTROL_V1,
@@ -58,11 +77,14 @@ pub fn execution_edge_desks() -> [StrategyBook; 2] {
 
 /// Which simulator a book's ledger is produced by. Legacy books stay legacy forever.
 pub fn book_simulator(strategy_key: &str) -> &'static str {
-    match strategy_key {
-        STRATEGY_RANDOM_EXECUTION_CONTROL_V1 | STRATEGY_MICROSTRUCTURE_BASELINE_V1 => {
-            SIMULATOR_EXECUTION_TWIN
-        }
-        _ => SIMULATOR_LEGACY,
+    if matches!(
+        strategy_key,
+        STRATEGY_RANDOM_EXECUTION_CONTROL_V1 | STRATEGY_MICROSTRUCTURE_BASELINE_V1
+    ) || crate::is_exec_select(strategy_key)
+    {
+        SIMULATOR_EXECUTION_TWIN
+    } else {
+        SIMULATOR_LEGACY
     }
 }
 

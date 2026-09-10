@@ -6,10 +6,18 @@ services:
     # Working set (decisions ~900 MB, archive indexes) far exceeds the 128 MB default; observed
     # multi-second DataFileRead waits stalled the collector and paper loop. Docker VM is 3.8 GB
     # shared with ClickHouse (capped in db/clickhouse/config.d/memory.xml).
-    # synchronous_commit=off: the volume lives on an external APFS sparsebundle where fsync is
-    # ~175x slower than local disk, and the collector issues several commits per transaction.
-    # Off trades <=~600 ms of committed rows on a crash (never corruption) for throughput; the
-    # NDJSON journal under PUMPHOUND_DATA_DIR remains the evidence of record and is replayable.
+    #
+    # 2026-09-10: volume moved off the external X9 sparsebundle onto the internal SSD (bind mount
+    # below, not a Docker-managed named volume) after `iostat` showed the X9 sustaining
+    # 100-300+ MB/s / 2,000-10,000+ tx/s continuously, with a 19h slow-query log recording bare
+    # `SELECT 1`/`COMMIT` (touching zero tables) taking up to 72.7s — a below-the-SQL-layer disk
+    # bottleneck, not a query problem. See docs/DATA_DURABILITY.md for the full investigation.
+    # `synchronous_commit=off` predates this move (originally: fsync on the X9's APFS sparsebundle
+    # measured ~175x slower than local disk). It's now on fast local storage, so the original
+    # throughput justification is weaker than when this was set — left unchanged for now since
+    # durability tuning is a separate decision from the storage-location fix, not revisited here.
+    # The NDJSON journal under PUMPHOUND_DATA_DIR remains the evidence of record and is replayable
+    # regardless of this setting.
     command: >-
       postgres -c shared_buffers=768MB -c effective_cache_size=2GB -c work_mem=16MB
       -c maintenance_work_mem=128MB -c random_page_cost=1.1
@@ -21,7 +29,7 @@ services:
     ports:
       - "127.0.0.1:5433:5432"
     volumes:
-      - pumphound-pg:/var/lib/postgresql/data
+      - /Users/shubhamkumar/PumpHoundFastData/postgres:/var/lib/postgresql/data
       - ./db/postgres/001_core.sql:/docker-entrypoint-initdb.d/001_core.sql:ro
       - ./db/postgres/002_intelligence.sql:/docker-entrypoint-initdb.d/002_intelligence.sql:ro
       - ./db/postgres/003_autonomous_paper.sql:/docker-entrypoint-initdb.d/003_autonomous_paper.sql:ro
@@ -40,6 +48,7 @@ services:
       - ./db/postgres/016_pending_research_intent_index.sql:/docker-entrypoint-initdb.d/016_pending_research_intent_index.sql:ro
       - ./db/postgres/017_execution_twin.sql:/docker-entrypoint-initdb.d/017_execution_twin.sql:ro
       - ./db/postgres/018_paper_loop_hot_path_indexes.sql:/docker-entrypoint-initdb.d/018_paper_loop_hot_path_indexes.sql:ro
+      - ./db/postgres/019_exec_select.sql:/docker-entrypoint-initdb.d/019_exec_select.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U pumphound -d pumphound"]
       interval: 3s
@@ -58,7 +67,7 @@ services:
       - "127.0.0.1:8123:8123"
       - "127.0.0.1:9009:9000"
     volumes:
-      - pumphound-ch:/var/lib/clickhouse
+      - /Users/shubhamkumar/PumpHoundFastData/clickhouse:/var/lib/clickhouse
       - ./db/clickhouse/001_events.sql:/docker-entrypoint-initdb.d/001_events.sql:ro
       - ./db/clickhouse/002_insert_buffering.sql:/docker-entrypoint-initdb.d/002_insert_buffering.sql:ro
       - ./db/clickhouse/config.d/memory.xml:/etc/clickhouse-server/config.d/memory.xml:ro
@@ -89,6 +98,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  pumphound-pg:
-  pumphound-ch:
   pumphound-nats:

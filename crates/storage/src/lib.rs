@@ -256,6 +256,46 @@ impl Stores {
         Ok(())
     }
 
+    /// Historical point-in-time state resolver: the first market state actually observed for
+    /// `mint` at or after `target_slot`. Built for Execution Twin scenario replay, which needs a
+    /// *different, real* arrival state per landing-delay scenario (a trade that lands 2 slots
+    /// later saw different market state, not the same recorded snapshot with the clock relabeled)
+    /// rather than reusing the one arrival snapshot captured live. `market_snapshots_buffer`
+    /// (not the base table directly) so a slot written moments ago by the collector isn't
+    /// wrongly reported as missing while still sitting in ClickHouse's insert buffer — same
+    /// reasoning as the existing snapshot-by-id lookup in truth.rs.
+    ///
+    /// Returns `None` when no snapshot was ever recorded at or after that slot for this mint
+    /// (the market went cold, or the requested slot is beyond what this dataset ever tracked) —
+    /// callers must treat that as "unknown", never silently substitute the original snapshot.
+    pub async fn market_snapshot_at_or_after(
+        &self,
+        mint: &str,
+        target_slot: u64,
+    ) -> Result<Option<MarketSnapshot>, StorageError> {
+        #[derive(Deserialize, clickhouse::Row)]
+        struct Snapshot {
+            snapshot_json: String,
+        }
+        let row = self
+            .clickhouse
+            .query(
+                "SELECT snapshot_json FROM market_snapshots_buffer \
+                 WHERE mint=? AND slot>=? ORDER BY slot ASC, observed_at ASC LIMIT 1",
+            )
+            .bind(mint)
+            .bind(target_slot)
+            .fetch_optional::<Snapshot>()
+            .await
+            .map_err(|e| StorageError::Clickhouse(e.to_string()))?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        serde_json::from_str::<MarketSnapshot>(&row.snapshot_json)
+            .map(Some)
+            .map_err(|e| StorageError::Clickhouse(format!("snapshot_json decode: {e}")))
+    }
+
     pub async fn load_hot_mints(&self) -> Result<Vec<String>, StorageError> {
         Ok(sqlx::query_scalar::<_, String>(
             r#"WITH valid_hot AS (
@@ -1186,6 +1226,13 @@ impl Stores {
         Ok(())
     }
 
+    /// Also reclaims `failed` rows (a transport/decode error, not a considered "no funder
+    /// found") after a 5-minute backoff, up to 5 attempts total — the same
+    /// retry-with-backoff-and-a-cap shape used for exit retries elsewhere in this codebase,
+    /// so a transient RPC hiccup doesn't strand a wallet at `failed` forever, but a
+    /// persistently-broken one doesn't retry indefinitely either. `unknown` (a considered
+    /// answer: history too long to see genesis, no net inflow, etc.) is never reclaimed —
+    /// that status means the question was actually answered, just in the negative.
     pub async fn claim_funding_batch(&self, limit: i64) -> Result<Vec<String>, StorageError> {
         let mut tx = self.postgres.begin().await?;
         let rows = sqlx::query(
@@ -1194,6 +1241,7 @@ impl Stores {
             WHERE q.wallet IN (
               SELECT wallet FROM pumphound.funding_queue
               WHERE status = 'queued'
+                 OR (status = 'failed' AND attempts < 5 AND updated_at < now() - interval '5 minutes')
               ORDER BY priority DESC, updated_at ASC
               LIMIT $1
               FOR UPDATE SKIP LOCKED
@@ -1221,6 +1269,37 @@ impl Stores {
         .bind(wallet)
         .bind(status)
         .bind(last_error)
+        .execute(&self.postgres)
+        .await?;
+        Ok(())
+    }
+
+    /// Records one resolved (wallet, funder) edge. `edge_id` is deterministic
+    /// (wallet+funder+algorithm_version) so a re-resolution is an upsert, not a duplicate.
+    pub async fn record_funding_edge(
+        &self,
+        wallet: &str,
+        funder: &str,
+        source: &str,
+        score: f64,
+        evidence: &serde_json::Value,
+        algorithm_version: &str,
+    ) -> Result<(), StorageError> {
+        sqlx::query(
+            r#"INSERT INTO pumphound.funding_edges
+            (edge_id, wallet, funder, source, score, evidence, algorithm_version, known_at)
+            VALUES (md5($1||':'||$2||':'||$6),$1,$2,$3,$4,$5,$6, now())
+            ON CONFLICT (wallet, funder, algorithm_version) DO UPDATE SET
+              score = EXCLUDED.score,
+              evidence = EXCLUDED.evidence,
+              known_at = now()"#,
+        )
+        .bind(wallet)
+        .bind(funder)
+        .bind(source)
+        .bind(score)
+        .bind(evidence)
+        .bind(algorithm_version)
         .execute(&self.postgres)
         .await?;
         Ok(())

@@ -10,6 +10,7 @@ import type { ReportValue, ResearchFunnelResponse, ResearchStrategyReport } from
 import { useSystem } from "../../stores/system";
 import { EnrichmentBudgetStrip } from "../enrichment/EnrichmentBudgetStrip";
 import { LearningDeskPanel } from "./LearningDeskPanel";
+import { SelectionLab } from "./SelectionLab";
 
 export function ResearchPage() {
   const systemStatus = useSystem((state) => state.status);
@@ -93,6 +94,7 @@ export function ResearchPage() {
           <div className="font-mono text-label text-muted">DISPLAY ONLY</div>
         </div>
       </div>
+      <SelectionLab />
       <ResearchExecutive reports={asArray(response?.items)} />
       <div className="mb-3">
         <EnrichmentBudgetStrip />

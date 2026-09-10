@@ -285,6 +285,31 @@ pub struct ReplayRequest {
     pub priority_fee_policy: Option<String>,
     pub jito_scenario: Option<String>,
     pub slippage_limit_bps: Option<u32>,
+    /// One of FAST/BASE/SLOW/STRESSED (see `canonical_scenario`). Unlike `landing_delay_slots`,
+    /// this resolves *real* market state at the scenario's target slot from `market_snapshots`
+    /// instead of reusing the one arrival snapshot recorded live — a trade landing later saw
+    /// different price/liquidity, not the same snapshot with different fees stapled on. Mutually
+    /// exclusive with the manual knobs above (returns an error if both are set): this field exists
+    /// for systematic dataset construction, not ad-hoc tweaking of one already-precise knob.
+    pub scenario: Option<String>,
+}
+
+/// FAST/BASE/SLOW/STRESSED, in terms this simulator's own landing model already understands:
+/// `attempted_slot = decision_slot + 1` is the earliest a transaction can land at all, and the
+/// model itself resolves an expired/never-landed transaction at `landing_slots=3` beyond that
+/// (`landing.rs::sample`) — i.e. `decision_slot + 5` is where "timed out" territory begins. These
+/// four offsets are chosen relative to those two anchors, not fitted percentiles of a continuous
+/// distribution (the landing model is a 4-outcome discrete draw, not one) — do not read them as
+/// calibrated p25/p50/p75/p95. `BASE` is a passthrough: replay the trace exactly as it actually
+/// happened, no override, no historical-state resolution.
+fn canonical_scenario(name: &str) -> Option<Option<(PriorityFeePolicy, JitoScenario, u64)>> {
+    match name.to_ascii_uppercase().as_str() {
+        "BASE" => Some(None),
+        "FAST" => Some(Some((PriorityFeePolicy::P25, JitoScenario::NoJito, 1))),
+        "SLOW" => Some(Some((PriorityFeePolicy::P50, JitoScenario::NoJito, 3))),
+        "STRESSED" => Some(Some((PriorityFeePolicy::P95, JitoScenario::Aggressive, 6))),
+        _ => None,
+    }
 }
 
 async fn replay(
@@ -373,6 +398,41 @@ pub async fn replay_value(
     let stored = load_execution(&s.stores, trace_id, req.intent_id).await?;
     let mut payload = stored.payload.clone();
     let mut counterfactual = serde_json::Map::new();
+    if req.scenario.is_some()
+        && (req.priority_fee_policy.is_some()
+            || req.jito_scenario.is_some()
+            || req.landing_delay_slots.is_some())
+    {
+        anyhow::bail!(
+            "scenario is mutually exclusive with priority_fee_policy/jito_scenario/landing_delay_slots"
+        );
+    }
+    let mut arrival_snapshot = stored.arrival_snapshot.clone();
+    let mut historical_state_resolved: Option<bool> = None;
+    if let Some(name) = req.scenario.as_deref() {
+        let parsed = canonical_scenario(name).ok_or_else(|| {
+            anyhow::anyhow!("unknown scenario {name} (expected FAST/BASE/SLOW/STRESSED)")
+        })?;
+        counterfactual.insert("scenario".into(), json!(name.to_ascii_uppercase()));
+        if let Some((fee_policy, jito, offset_slots)) = parsed {
+            payload.config.priority_fee_policy = fee_policy;
+            payload.config.jito_scenario = jito;
+            payload.intent.cost_scenario = jito;
+            counterfactual.insert("priority_fee_policy".into(), json!(fee_policy.as_str()));
+            counterfactual.insert("jito_scenario".into(), json!(jito.as_str()));
+            counterfactual.insert("scenario_offset_slots".into(), json!(offset_slots));
+            let target_slot = payload.intent.decision_slot.0 + offset_slots;
+            let resolved = s
+                .stores
+                .market_snapshot_at_or_after(&payload.intent.mint.to_string(), target_slot)
+                .await?;
+            historical_state_resolved = Some(resolved.is_some());
+            // None here is honest degradation (DATA_STALE via execute_payload below), not a
+            // silent fallback to the original recorded snapshot — a scenario that asked for
+            // market state 6 slots later must not be scored against state from slot+1.
+            arrival_snapshot = resolved;
+        }
+    }
     if let Some(policy) = req.priority_fee_policy.as_deref() {
         let parsed = PriorityFeePolicy::parse(policy)
             .ok_or_else(|| anyhow::anyhow!("unknown priority_fee_policy {policy}"))?;
@@ -399,8 +459,12 @@ pub async fn replay_value(
         };
         counterfactual.insert("landing_delay_slots".into(), json!(shift));
     }
-    let is_counterfactual = !counterfactual.is_empty();
-    let result = execution_twin_bridge::execute_payload(&payload, stored.arrival_snapshot.as_ref());
+    // scenario="BASE" is a labelled passthrough, not a counterfactual: it must still report
+    // matches_original like an empty body would. Any other key means a real override applied.
+    let is_counterfactual = counterfactual
+        .iter()
+        .any(|(key, value)| key != "scenario" || value.as_str() != Some("BASE"));
+    let result = execution_twin_bridge::execute_payload(&payload, arrival_snapshot.as_ref());
     let fingerprint = result_fingerprint(&result);
     let matches_original = if is_counterfactual {
         None
@@ -438,7 +502,8 @@ pub async fn replay_value(
         "fingerprint": fingerprint,
         "original_fingerprint": stored.original_fingerprint,
         "matches_original": matches_original,
-        "arrival_state_available": stored.arrival_snapshot.is_some(),
+        "arrival_state_available": arrival_snapshot.is_some(),
+        "historical_state_resolved": historical_state_resolved,
         "result": result,
         "paper_only": true,
         "live_money": false

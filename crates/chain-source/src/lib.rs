@@ -1,8 +1,10 @@
+mod backfill;
 mod hot_mints;
 mod laserstream;
 mod replay;
 mod websocket;
 
+pub use backfill::backfill_since_checkpoint;
 pub use hot_mints::{is_hot_mint, logs_mention_hot, replace_hot_mints};
 pub use laserstream::HeliusLaserstreamSource;
 pub use replay::ParquetReplaySource;

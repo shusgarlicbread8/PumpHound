@@ -76,6 +76,37 @@ async fn main() -> anyhow::Result<()> {
             }
         });
     }
+    // Backfill runs concurrently with (not before) the live source, not after it: a live
+    // subscription starts receiving from "now" the instant it connects, so starting it first
+    // and layering backfill alongside it means the two together cover checkpoint..now..live
+    // with no timing gap between "backfill's last fetched slot" and "live's first received
+    // slot". Any overlap is deduplicated downstream the same way any other duplicate delivery
+    // already is (sighting_id / ON CONFLICT DO NOTHING) — safe to double up, not safe to gap.
+    if let Some(checkpoint) = cursor.clone() {
+        let backfill_tx = tx.clone();
+        let backfill_rpc = rpc_url.clone();
+        let backfill_programs = source_cfg.program_ids.clone();
+        tokio::spawn(async move {
+            let Ok(http) = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+            else {
+                warn!("backfill: could not build HTTP client; skipping catch-up for this run");
+                return;
+            };
+            pumphound_chain_source::backfill_since_checkpoint(
+                &http,
+                &backfill_rpc,
+                &backfill_programs,
+                &checkpoint,
+                &backfill_tx,
+                0,
+            )
+            .await;
+        });
+    } else {
+        info!("backfill: no prior checkpoint found (first run); nothing to catch up from");
+    }
     let mut source = open_source(&source_cfg).await;
     tokio::spawn(async move {
         if let Err(e) = source.run(cursor, tx).await {
@@ -108,7 +139,14 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or(300)
             .max(60);
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            // Long enough to clear `backfill_since_checkpoint`'s worst case (1 page/1,000
+            // signatures at its own throttle, on the order of 1-2 minutes) before this fires.
+            // At the old 30s delay, this refresh's own heavy write (the CO_BOUGHT_WITH
+            // derived-edges rebuild, an O(buyers) self-join per mint) landed in the middle of
+            // every restart's backfill catch-up, and the two together pushed /api/v1/home past
+            // 15s for the whole overlap (measured 2026-09-09). Restart cost should be additive
+            // at worst, not multiplicative.
+            tokio::time::sleep(std::time::Duration::from_secs(150)).await;
             loop {
                 if let Err(e) = stores.refresh_intelligence().await {
                     warn!(error = %e, "intelligence refresh");
@@ -169,11 +207,17 @@ async fn main() -> anyhow::Result<()> {
         }
         let parsed: Result<RawTransaction, _> = serde_json::from_value(raw.payload.clone());
         let Ok(mut transaction) = parsed else {
-            // Still make the sighting durable so the batch/checkpoint ledger stays complete.
-            if let Err(e) = stores.persist_raw_batch(&durable).await {
-                warn!(error = %e, "raw persist failed");
+            // Advance the checkpoint only once the sighting is actually durable — see the
+            // matching comment on the main persist/checkpoint path below for why this can't be
+            // unconditional.
+            match stores.persist_raw_batch(&durable).await {
+                Ok(()) => {
+                    if let Err(e) = stores.record_checkpoint(&durable.cursor).await {
+                        warn!(error = %e, "checkpoint write failed");
+                    }
+                }
+                Err(e) => warn!(error = %e, slot = raw.slot.0, "raw persist failed; checkpoint NOT advanced"),
             }
-            let _ = stores.record_checkpoint(&durable.cursor).await;
             warn!("envelope payload is not a RawTransaction");
             continue;
         };
@@ -185,18 +229,33 @@ async fn main() -> anyhow::Result<()> {
                 evidence.append(stream.clone(), line).await;
             }
             let uri = format!("{stream}#sig={}", transaction.signature);
-            // The batch row, the source checkpoint and the archive index are independent
-            // writes (Postgres ×2, ClickHouse ×1). Issued sequentially they cost ~3 round
-            // trips per sighting; the ingest loop was store-latency bound at ~30 tx/s.
-            let (persisted, checkpointed, indexed) = tokio::join!(
+            // persist_raw_batch and the checkpoint used to be issued concurrently with
+            // tokio::join! alongside the archive index, for throughput (Postgres x2 + ClickHouse
+            // x1 sequentially cost ~3 round trips/sighting; the ingest loop was store-latency
+            // bound at ~30 tx/s). But that meant record_checkpoint's result was ignored
+            // (`let _ = checkpointed;`) and it ran regardless of whether persist_raw_batch
+            // actually succeeded — a transient Postgres/ClickHouse failure could still advance
+            // the durable cursor past a sighting that was never durably stored anywhere but the
+            // write-behind journal. On restart the collector resumes live tailing from that
+            // cursor (see crates/chain-source/src/websocket.rs — there is no backfill yet; see
+            // docs/DATA_DURABILITY.md), so an advanced-but-unpersisted cursor was a real,
+            // silent data-loss path, not just a slow retry. The archive index stays concurrent
+            // with the raw persist (both are the primary write, independent of each other);
+            // the checkpoint now only advances after persist_raw_batch has actually succeeded.
+            let (persisted, indexed) = tokio::join!(
                 stores.persist_raw_batch(&durable),
-                stores.record_checkpoint(&durable.cursor),
                 stores.index_raw_archive(&raw, &transaction, &uri),
             );
-            if let Err(e) = persisted {
-                warn!(error = %e, "raw persist failed; continuing decode");
+            match persisted {
+                Ok(()) => {
+                    if let Err(e) = stores.record_checkpoint(&durable.cursor).await {
+                        warn!(error = %e, "checkpoint write failed; will retry this cursor position on next successful persist");
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, slot = raw.slot.0, "raw persist failed; checkpoint NOT advanced so this sighting is not silently skipped on restart");
+                }
             }
-            let _ = checkpointed;
             if let Err(e) = indexed {
                 warn!(error = %e, "raw archive index");
             }

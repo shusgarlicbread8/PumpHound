@@ -31,7 +31,15 @@ export type StrategyMetrics = {
   fillRateDisplay: string;
   executionDragDisplay: string;
   profitFactorDisplay: string;
+  etaDisplay: string;
 };
+
+function formatEtaHours(hours: number): string {
+  if (hours <= 0) return "any moment";
+  if (hours < 1) return `~${Math.max(1, Math.round(hours * 60))}m`;
+  if (hours < 48) return `~${Math.round(hours)}h`;
+  return `~${Math.round(hours / 24)}d`;
+}
 
 function nested(item: Record<string, unknown>, key: string): unknown {
   if (item[key] !== undefined && item[key] !== null) return item[key];
@@ -56,7 +64,17 @@ export function strategyMetrics(row: unknown): StrategyMetrics {
   const sol = (value: unknown) => (asNumber(value) == null ? "UNKNOWN" : `${asNumber(value)!.toFixed(6)} SOL`);
   const pct = (value: unknown) => (asNumber(value) == null ? "UNKNOWN" : `${(asNumber(value)! * 100).toFixed(1)}%`);
   const simulatorVersion = asString(nested(item, "simulator_version"), "legacy-paper-v1");
+  const sampleStatus = asString(nested(item, "sample_status"), confidenceLabel(closed));
+  const etaHours = asNumber(item.eta_hours_to_next_sample_threshold ?? nested(item, "eta_hours_to_next_sample_threshold"));
+  const nextThreshold = sampleStatus === "INSUFFICIENT" ? 30 : sampleStatus === "EARLY" ? 100 : null;
+  const etaDisplay =
+    nextThreshold == null
+      ? "SUFFICIENT SAMPLE"
+      : etaHours == null
+        ? "RATE TOO LOW TO ESTIMATE"
+        : `${formatEtaHours(etaHours)} to ${nextThreshold} closed`;
   return {
+    etaDisplay,
     simulatorVersion,
     fidelity: simulatorVersion.startsWith("execution-twin") ? "EXECUTION TWIN V1" : "LEGACY SIMULATOR",
     netExLargestDisplay: sol(tail.net_ex_largest_winner),
@@ -69,7 +87,7 @@ export function strategyMetrics(row: unknown): StrategyMetrics {
     bookId: asString(item.book_id ?? item.simulation_run_id, ""),
     experimentId: asString(item.experiment_id, "UNKNOWN"),
     open: asNumber(nested(item, "open_positions")),
-    sample: asString(nested(item, "sample_status"), confidenceLabel(closed)),
+    sample: sampleStatus,
     edge: asString(nested(item, "edge_status"), "INCONCLUSIVE"),
     authority: asString(nested(item, "authority"), "UNKNOWN"),
     netPnlSol: units.metric_values === "SOL" ? asNumber(nested(item, "net_pnl")) : null,

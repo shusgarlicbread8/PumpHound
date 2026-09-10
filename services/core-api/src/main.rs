@@ -17,6 +17,7 @@ mod market_rehydrate;
 mod paper_ledger;
 mod paper_loop;
 mod readiness;
+mod research_select;
 mod routes;
 mod state;
 mod stream;

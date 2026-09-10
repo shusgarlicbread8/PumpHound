@@ -56,7 +56,7 @@ pg_bytes="$(wc -c <"$out/postgres/pumphound.sql" | tr -d ' ')"
 
 pg_counts="$out/postgres/table_counts.tsv"
 "${pg_dump_cmd[@]}" psql -U pumphound -d pumphound -At -c \
-  "SELECT table_schema||'.'||table_name||E'\t'||n_live_tup
+  "SELECT schemaname||'.'||relname||E'\t'||n_live_tup
    FROM pg_stat_user_tables ORDER BY 1" >"$pg_counts" || true
 
 echo "clickhouse"

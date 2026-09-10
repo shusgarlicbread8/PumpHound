@@ -10,19 +10,20 @@ use pumphound_domain::{
 };
 use pumphound_market_state::curve_progress;
 use pumphound_paper_core::{
-    adaptive_desks, book_by_key, evaluate_champion_short_horizon, evaluate_exit,
-    evaluate_microstructure_baseline, execution_edge_desks, uses_execution_twin,
-    EXECUTION_EDGE_EXPERIMENT_ID, MICROSTRUCTURE_MAX_SELL_COUNT_30,
+    adaptive_desks, book_by_key, evaluate_champion_short_horizon, evaluate_exec_select,
+    evaluate_exit, evaluate_microstructure_baseline, evaluate_open_position_risk, exec_select_desks,
+    execution_edge_desks, is_exec_select, score_information_value, uses_execution_twin,
+    EXECUTION_EDGE_EXPERIMENT_ID, EXEC_SELECT_EXPERIMENT_ID, MICROSTRUCTURE_MAX_SELL_COUNT_30,
     MICROSTRUCTURE_MIN_IMBALANCE_30, MICROSTRUCTURE_MIN_RETURN_30,
     MICROSTRUCTURE_MIN_UNIQUE_BUYERS_30, STRATEGY_RANDOM_EXECUTION_CONTROL_V1,
     evaluate_heuristic_exit, evaluate_independent_book, evaluate_information_value_explorer,
     evaluate_opportunity, evaluate_random_control, evaluate_research_filter,
     evaluate_shared_universe, evaluate_technical_eligibility, funnel_stage_for_reasons,
     investigation_features, learning_books, learning_funnel_state, local_graph_from_indicators,
-    parallel_books, quote_order, research_input_from_artifacts, score_information_value,
+    parallel_books, quote_order, research_input_from_artifacts,
     shared_inferred_funder_wallets, AutonomousPolicy, ChampionInputQuality, ExitAction,
     ExitDecision, ExitInput, HeuristicExitInput, HeuristicOpportunityInput, HeuristicPolicyV1,
-    InformationValueInput, LearningFunnelState, LearningPolicyV1, OpportunityAction,
+    InformationValueInput, LearningFunnelState, LearningPolicyV1, OpportunityAction, RiskSnapshot,
     OpportunityDecision, OpportunityInput, ShadowMlGateInput, StrategyBook,
     TechnicalEligibilityInput, ADAPTIVE_EXPERIMENT_ID, ADVERSE_MOVE_TARGET,
     CHAMPION_MAXIMUM_ADVERSE, CHAMPION_MAX_MISSINGNESS, CHAMPION_MAX_OOD,
@@ -30,7 +31,7 @@ use pumphound_paper_core::{
     EXIT_HAZARD_TARGET, EXPECTED_MFE_TARGET, FEATURE_VERSION, FEE_MODEL_VERSION,
     LATENCY_CONFIG_VERSION, SHADOW_MAXIMUM_EXIT_HAZARD, SHARED_UNIVERSE_VERSION,
     SHORT_MOMENTUM_TARGET, STRATEGY_CHAMPION_SHORT_HORIZON_V1, STRATEGY_CONTROL_FLOW_V1,
-    STRATEGY_INFORMATION_VALUE_EXPLORER_V1, STRATEGY_RANDOM_CONTROL_V1,
+    STRATEGY_INFORMATION_VALUE_EXPLORER_V1, STRATEGY_IV_SELECT_V1, STRATEGY_RANDOM_CONTROL_V1,
 };
 use serde_json::{json, Value};
 use sqlx::Row;
@@ -95,7 +96,7 @@ impl ExperimentPolicies {
     }
 }
 
-const OPTIONAL_GRAPH_FEATURE_NAMES: [&str; 20] = [
+const OPTIONAL_GRAPH_FEATURE_NAMES: [&str; 23] = [
     "holder_top_1_share",
     "holder_top_5_share",
     "holder_top_10_share",
@@ -116,6 +117,9 @@ const OPTIONAL_GRAPH_FEATURE_NAMES: [&str; 20] = [
     "creator_graduation_posterior",
     "creator_collapse_posterior",
     "history_coverage_fraction",
+    "same_slot_first10_share",
+    "same_funder_first10_count",
+    "first10_buyer_count",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -371,6 +375,55 @@ pub fn spawn(state: Arc<AppState>) {
                 .await
                 {
                     warn!(%error, "could not register execution-edge track invariant");
+                }
+                for book in exec_select_desks() {
+                    let regime = pumphound_paper_core::exec_select_timing(book.key);
+                    let config = json!({
+                        "schema_version": 1,
+                        "policy_version": book.key,
+                        "experiment_id": EXEC_SELECT_EXPERIMENT_ID,
+                        "simulator_version": pumphound_execution_twin::SIMULATOR_VERSION,
+                        "landing_model_version": pumphound_execution_twin::landing::LANDING_MODEL_VERSION,
+                        "twin_config": twin_config,
+                        "execution_envelope_policy": learning.random_control.policy.strategy_version,
+                        "execution_envelope_sha256": learning.random_control.sha256,
+                        "timing_regime": regime.map(|r| r.as_str()),
+                        "entry_atomic": pumphound_paper_core::EXECUTION_EDGE_ENTRY_ATOMIC.to_string(),
+                        "confidence_sizing": false,
+                        "continuous_risk_exits": true,
+                        "paper_only": true,
+                        "live_money": false,
+                        "automatic_promotion": false
+                    });
+                    let sha = pumphound_domain::sha256_hex(
+                        serde_json::to_string(&config).unwrap_or_default().as_bytes(),
+                    );
+                    if let Err(error) =
+                        paper_ledger::register_immutable_policy(&state.stores, book.key, &config, &sha)
+                            .await
+                    {
+                        warn!(%error, policy = book.key, "could not register exec-select book policy");
+                    }
+                }
+                if let Err(error) = paper_ledger::ensure_research_track_invariant(
+                    &state.stores,
+                    EXEC_SELECT_EXPERIMENT_ID,
+                    false,
+                    &json!({
+                        "execution_envelope": learning.random_control.sha256,
+                        "simulator_version": pumphound_execution_twin::SIMULATOR_VERSION
+                    }),
+                    &json!(exec_select_desks().map(|book| book.key)),
+                    &json!({
+                        "paper_only": true,
+                        "automatic_promotion": false,
+                        "picker_not_sniper": true,
+                        "matched_confirmed_early": ["RANDOM_SELECT_V1","MARKET_CONFIRMED_V1","LOSS_FILTER_V1","IV_SELECT_V1"]
+                    }),
+                )
+                .await
+                {
+                    warn!(%error, "could not register exec-select track invariant");
                 }
                 if let Err(error) = paper_ledger::ensure_research_track_invariant(
                     &state.stores,
@@ -677,6 +730,58 @@ async fn ensure_learning_desks(
     Ok(desks)
 }
 
+async fn ensure_exec_select_desks(
+    state: &AppState,
+    learning: &LearningPolicies,
+) -> anyhow::Result<Vec<LiveDesk>> {
+    let loaded = &learning.random_control;
+    let twin_config = crate::execution_twin_bridge::default_config();
+    let mut desks = Vec::new();
+    for book in exec_select_desks() {
+        let (portfolio_id, run_id) = paper_ledger::ensure_strategy_portfolio(
+            &state.stores,
+            &state.mode,
+            book.key,
+            book.desk_name,
+            book.key,
+            book.capital_sol_atomic,
+            0,
+            book.ml_status,
+            book.ai_status,
+            json!({
+                "experiment_id": EXEC_SELECT_EXPERIMENT_ID,
+                "experiment_frozen": false,
+                "paper_only": true,
+                "live_money": false,
+                "picker_not_sniper": true,
+                "strategy_version": book.key,
+                "simulator_version": pumphound_execution_twin::SIMULATOR_VERSION,
+                "landing_model_version": pumphound_execution_twin::landing::LANDING_MODEL_VERSION,
+                "twin_config": twin_config,
+                "timing_regime": pumphound_paper_core::exec_select_timing(book.key).map(|r| r.as_str()),
+                "execution_envelope_policy": loaded.policy.strategy_version,
+                "policy_content_sha256": loaded.sha256,
+                "feature_version": FEATURE_VERSION,
+                "position_sizing": {
+                    "fixed_sol_atomic": pumphound_paper_core::EXECUTION_EDGE_ENTRY_ATOMIC,
+                    "maximum_positions": loaded.policy.execution.maximum_positions
+                },
+                "entry_authority": book.execution_authority,
+                "confidence_sizing": false,
+                "continuous_risk_exits": true,
+                "shadow_predictions_cannot_change_control": true
+            }),
+        )
+        .await?;
+        desks.push(LiveDesk {
+            book,
+            portfolio_id,
+            run_id,
+        });
+    }
+    Ok(desks)
+}
+
 /// EXECUTION-EDGE-V1 desks. They share RANDOM_CONTROL's execution envelope (fixed size, hold,
 /// impact caps) so RANDOM_CONTROL (legacy sim) vs RANDOM_EXECUTION_CONTROL (twin) differ ONLY in
 /// the simulator, and MICROSTRUCTURE_BASELINE differs from the twin control ONLY in selection.
@@ -753,7 +858,13 @@ ORDER BY known_at DESC
 LIMIT 80
 "#;
 
-const EXIT_RETRY_BACKOFF_SECONDS: i64 = 30;
+// Must exceed market_rehydrate::MIN_REFETCH_INTERVAL (45s): a cold-market exit retry calls
+// unstrand_position, which throttles repeat on-chain reads of the same market to protect the
+// RPC provider. At the old 30s backoff, roughly a third of retries did nothing but hit that
+// throttle and immediately fail with DATA_STALE, burning attempts on a market that was never
+// actually re-checked. Checked live on 2026-09-09: 15 positions were stuck near the attempt cap
+// this way. 50s clears the throttle window on every retry so each attempt is a real RPC check.
+const EXIT_RETRY_BACKOFF_SECONDS: i64 = 50;
 const EXIT_MAX_ATTEMPTS: i64 = 200;
 
 /// Decision key for the next fixed-max-hold exit attempt, or `None` when an attempt is still
@@ -766,7 +877,7 @@ async fn next_fixed_exit_decision_key(
         r#"WITH attempts AS (
              SELECT d.decision_id, d.decision_at
              FROM pumphound.decisions d
-             WHERE d.decision_kind='EXIT' AND (d.payload->>'position_id')=$1
+             WHERE d.decision_kind='EXIT' AND (d.exact_inputs->>'position_id')=$1
                AND d.decision_key LIKE 'learn-exit:%:fixed-max-hold%'
            )
            SELECT (SELECT COUNT(*) FROM attempts)::bigint,
@@ -868,6 +979,7 @@ async fn scan_learning_entries(
 ) -> anyhow::Result<()> {
     let desks = ensure_learning_desks(state, learning).await?;
     let execution_edge_desks_live = ensure_execution_edge_desks(state, learning).await?;
+    let exec_select_desks_live = ensure_exec_select_desks(state, learning).await?;
     let readiness = crate::readiness::compute(state).await;
     if let Some(champion_desk) = desks
         .iter()
@@ -1209,6 +1321,82 @@ async fn scan_learning_entries(
         }
 
         let serving_missingness = pumphound_paper_core::vector_serving_missingness(&vector.values);
+        let select_regime_rarity = vector
+            .values
+            .get("curve_progress")
+            .and_then(Value::as_f64)
+            .map(|progress| ((progress - 0.5).abs() * 2.0).clamp(0.0, 1.0));
+        let select_iv_input = InformationValueInput {
+            prediction_uncertainty: None,
+            missingness_novelty: serving_missingness,
+            regime_rarity: select_regime_rarity,
+            familiarity: None,
+        };
+        let select_iv_score =
+            score_information_value(&learning.information_value.policy, &select_iv_input);
+        let risk_snapshot = RiskSnapshot::from_values(&vector.values);
+        for select_desk in &exec_select_desks_live {
+            let select_open = portfolio_exposure_count(
+                &state.stores,
+                select_desk.portfolio_id,
+                select_desk.run_id,
+            )
+            .await?;
+            let select_technical = evaluate_technical_eligibility(
+                &control_policy.policy,
+                &TechnicalEligibilityInput {
+                    age_seconds,
+                    quality_sufficient: quality_sufficient(&snapshot),
+                    liquidity_quote_atomic: Some(snapshot.effective_quote_atomic.0),
+                    entry_impact_bps: decision_quote.as_ref().map(|quote| quote.price_impact_bps),
+                    round_trip_cost_fraction,
+                    open_positions: select_open,
+                },
+            );
+            let select_policy = if select_desk.book.key == STRATEGY_IV_SELECT_V1 {
+                &learning.information_value.policy
+            } else {
+                &control_policy.policy
+            };
+            let select_decision = evaluate_exec_select(
+                select_desk.book,
+                select_policy,
+                &launch_id.to_string(),
+                &select_technical,
+                age_seconds,
+                &vector.values,
+                Some(&select_iv_score),
+            );
+            persist_book_decision(
+                state,
+                select_desk,
+                control_policy,
+                EXEC_SELECT_EXPERIMENT_ID,
+                launch_id,
+                &vector,
+                &snapshot,
+                creation_time,
+                first_observed_at,
+                snapshot_at,
+                age_bucket,
+                &select_technical,
+                &select_decision,
+                &json!({
+                    "selection": select_desk.book.execution_authority,
+                    "timing_regime": pumphound_paper_core::exec_select_timing(select_desk.book.key).map(|r| r.as_str()),
+                    "information_value_input": select_iv_input,
+                    "information_value_score": select_iv_score,
+                    "risk_snapshot": risk_snapshot,
+                    "model_inputs": false,
+                    "confidence_sizing": false,
+                    "simulator_version": pumphound_execution_twin::SIMULATOR_VERSION
+                }),
+                Some(TwinRoute {
+                    creator: Pubkey::from_base58(&creator).ok(),
+                }),
+            )
+            .await?;
+        }
         if let Some(champion_desk) = desks
             .iter()
             .find(|desk| desk.book.key == STRATEGY_CHAMPION_SHORT_HORIZON_V1)
@@ -1754,6 +1942,13 @@ async fn persist_book_decision(
     request.client_request_id = decision_id;
     request.quote_id = Uuid::now_v7();
     request.policy_version = desk.book.key.to_string();
+    if twin.is_some() {
+        // See crates/paper-core/src/execution_edge.rs module doc: the shared control_policy's
+        // fixed_sol_atomic (0.005 SOL) is right for the legacy-simulator book it was tuned for,
+        // but at that size a single ATA-rent charge was ~42% of every EXECUTION-EDGE-V1 entry —
+        // cost dominated by trade size, not by simulator realism or selection quality.
+        request.input.atomic = Atomic(pumphound_paper_core::EXECUTION_EDGE_ENTRY_ATOMIC);
+    }
     let queued = if let Some(route) = twin {
         let model_versions = model_versions
             .as_object()
@@ -1933,9 +2128,12 @@ async fn scan_learning_exits(
 ) -> anyhow::Result<()> {
     let mut desks = ensure_learning_desks(state, learning).await?;
     desks.extend(ensure_execution_edge_desks(state, learning).await?);
+    desks.extend(ensure_exec_select_desks(state, learning).await?);
     for desk in desks {
         let twin_desk = uses_execution_twin(desk.book.key);
-        let experiment_id = if twin_desk {
+        let experiment_id = if is_exec_select(desk.book.key) {
+            EXEC_SELECT_EXPERIMENT_ID
+        } else if twin_desk {
             EXECUTION_EDGE_EXPERIMENT_ID
         } else {
             ADAPTIVE_EXPERIMENT_ID
@@ -1961,7 +2159,97 @@ async fn scan_learning_exits(
                 .and_then(Value::as_str)
                 .and_then(|value| value.parse::<chrono::DateTime<chrono::Utc>>().ok())
                 .unwrap_or_else(now_utc);
-            if ((now_utc() - opened_at).num_seconds().max(0) as u64) < policy.maximum_hold_seconds {
+            let hold_reached = ((now_utc() - opened_at).num_seconds().max(0) as u64)
+                >= policy.maximum_hold_seconds;
+            let market = Pubkey::from_base58(value_str(&position, "market")?)?;
+            let quote_mint = Pubkey::from_base58(value_str(&position, "quote_mint")?)?;
+            let snapshot = {
+                let markets = state.markets.read().await;
+                identity_checked_snapshot(markets.get(mint), mint)
+            };
+            let snapshot = match snapshot {
+                Some(snapshot) => snapshot,
+                None => {
+                    if !hold_reached {
+                        continue;
+                    }
+                    match unstrand_position(state, launch_id, market, mint, quote_mint).await {
+                        Some(snapshot) => snapshot,
+                        None => continue,
+                    }
+                }
+            };
+            let feature_snapshot_id: Option<String> = sqlx::query_scalar(
+                r#"SELECT feature_snapshot_id FROM pumphound.feature_snapshots
+                   WHERE launch_id=$1 ORDER BY knowledge_cutoff DESC LIMIT 1"#,
+            )
+            .bind(launch_id)
+            .fetch_optional(&state.stores.postgres)
+            .await?;
+            let Some(feature_snapshot_id) = feature_snapshot_id else {
+                if hold_reached {
+                    continue;
+                }
+                continue;
+            };
+            let mut exit_reasons = vec!["fixed_maximum_hold_reached".to_string()];
+            let mut risk_class: Option<&str> = None;
+            let mut entry_risk = RiskSnapshot::default();
+            let mut current_risk = RiskSnapshot::default();
+            if is_exec_select(desk.book.key) {
+                let current_values = sqlx::query_scalar::<_, Value>(
+                    "SELECT values FROM pumphound.feature_snapshots WHERE feature_snapshot_id=$1",
+                )
+                .bind(&feature_snapshot_id)
+                .fetch_optional(&state.stores.postgres)
+                .await?;
+                if let Some(Value::Object(values)) = current_values {
+                    current_risk = RiskSnapshot::from_values(&values);
+                }
+                let entry_values = sqlx::query_scalar::<_, Value>(
+                    r#"SELECT exact_inputs->'learning_evidence'->'risk_snapshot'
+                       FROM pumphound.decisions
+                       WHERE launch_id=$1 AND policy_version=$2 AND decision_kind='ENTRY' AND action='BUY'
+                       ORDER BY decision_at DESC LIMIT 1"#,
+                )
+                .bind(launch_id)
+                .bind(desk.book.key)
+                .fetch_optional(&state.stores.postgres)
+                .await?;
+                if let Some(value) = entry_values {
+                    if let Ok(parsed) = serde_json::from_value::<RiskSnapshot>(value) {
+                        entry_risk = parsed;
+                    }
+                }
+                if let pumphound_paper_core::PositionRisk::Exit { class, reasons } =
+                    evaluate_open_position_risk(&entry_risk, &current_risk)
+                {
+                    risk_class = Some(class);
+                    exit_reasons = reasons;
+                    let _ = sqlx::query(
+                        r#"INSERT INTO pumphound.position_risk_events
+                           (risk_event_id, experiment_id, strategy_version, portfolio_id,
+                            simulation_run_id, position_id, launch_id, mint, class, reason_codes,
+                            entry_snapshot, current_snapshot, action)
+                           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'FULL_EXIT')"#,
+                    )
+                    .bind(Uuid::now_v7())
+                    .bind(experiment_id)
+                    .bind(desk.book.key)
+                    .bind(desk.portfolio_id)
+                    .bind(desk.run_id)
+                    .bind(parse_uuid(&position, "position_id")?)
+                    .bind(launch_id)
+                    .bind(mint)
+                    .bind(class)
+                    .bind(json!(exit_reasons))
+                    .bind(json!(entry_risk))
+                    .bind(json!(current_risk))
+                    .execute(&state.stores.postgres)
+                    .await;
+                }
+            }
+            if !hold_reached && risk_class.is_none() {
                 continue;
             }
             // A rejected exit (e.g. REJECTED_ARRIVAL_DEADLINE across a restart) must be retried,
@@ -1972,34 +2260,7 @@ async fn scan_learning_exits(
             else {
                 continue;
             };
-            let market = Pubkey::from_base58(value_str(&position, "market")?)?;
-            let quote_mint = Pubkey::from_base58(value_str(&position, "quote_mint")?)?;
-            let snapshot = {
-                let markets = state.markets.read().await;
-                identity_checked_snapshot(markets.get(mint), mint)
-            };
-            let snapshot = match snapshot {
-                Some(snapshot) => snapshot,
-                None => {
-                    // Cold token: the hot reducer no longer knows it. Read the current chain
-                    // account (paper-only RPC read) instead of leaving the position stranded.
-                    match unstrand_position(state, launch_id, market, mint, quote_mint).await {
-                        Some(snapshot) => snapshot,
-                        None => continue,
-                    }
-                }
-            };
             let base_atomic: u128 = value_str(&position, "base_atomic")?.parse()?;
-            let feature_snapshot_id: Option<String> = sqlx::query_scalar(
-                r#"SELECT feature_snapshot_id FROM pumphound.feature_snapshots
-                   WHERE launch_id=$1 ORDER BY knowledge_cutoff DESC LIMIT 1"#,
-            )
-            .bind(launch_id)
-            .fetch_optional(&state.stores.postgres)
-            .await?;
-            let Some(feature_snapshot_id) = feature_snapshot_id else {
-                continue;
-            };
             let decision_id = paper_ledger::persist_decision(
                 &state.stores,
                 Uuid::now_v7(),
@@ -2019,10 +2280,11 @@ async fn scan_learning_exits(
                     "fixed_exit_policy": {
                         "maximum_hold_seconds": policy.maximum_hold_seconds
                     },
+                    "continuous_risk": risk_class,
                     "position_id": position_id,
                     "paper_only": true
                 }),
-                &["fixed_maximum_hold_reached".into()],
+                &exit_reasons,
                 &json!({
                     "experiment_id": experiment_id,
                     "fixed_exit": true,
@@ -3195,6 +3457,24 @@ const SIZE_SCALING_EDGE_AT_MAX: f64 = 0.3;
 /// every book bets the fixed base size. Re-enable explicitly with
 /// `PUMPHOUND_CONFIDENCE_SIZING=enabled` once that evidence exists. The evidence payload keeps
 /// the band the model *would* have applied so the decision is auditable, not silently altered.
+///
+/// Investigated 2026-09-09 (`python -m pumphound_ml.backtest.edge_diagnosis`), gate NOT lifted:
+/// a plausible mechanism exists — in `outcome_labels`, launches whose ground-truth
+/// `adverse_move_2m_v1` fired (a 10%+ dip within 2 minutes) went on to hit the 5-minute pump
+/// label at ~49% vs ~25% for launches that never dipped, so subtracting `adverse` may be
+/// penalizing exactly the volatility this heavy-tailed asset's big winners come from. But
+/// walk-forward testing of that fix (and of momentum alone, and of adverse alone) against real
+/// realized returns found no formula with a *stable* sign across time folds — every candidate,
+/// including the current one, flips sign between the two out-of-sample folds. Full-sample
+/// correlations looked more decisive (current -0.13, adverse-flipped +0.12) but did not survive
+/// the same out-of-sample split, i.e. that gap is consistent with in-sample noise, not a fix.
+/// Separately: the ground-truth `short_momentum_2m_v1` label is a strong predictor of 5-minute
+/// return (~-7% vs ~+97% average by label value) — but the *shadow model's predicted*
+/// probability of that same label is not (~-0.02 correlation with realized return). That gap
+/// says the shadow model itself is the likelier problem, not the edge formula's arithmetic: no
+/// combination of a miscalibrated model's two outputs is going to fix a calibration problem.
+/// Likely real fix: retrain on post-cost twin labels once `pumphound_ml.postcost` has enough
+/// EXECUTION-EDGE-V1 volume, not a sign flip here.
 fn confidence_sizing_enabled() -> bool {
     std::env::var("PUMPHOUND_CONFIDENCE_SIZING")
         .map(|v| v.eq_ignore_ascii_case("enabled"))
@@ -3959,6 +4239,24 @@ async fn intelligence_indicators(
             "holder_top_1_share".into(),
             json_number(&row, "holder_top_1_share"),
         );
+    }
+    let cluster = crate::intelligence::funding_cluster_for_mint(
+        &state.stores,
+        mint,
+        creator,
+        as_of.slot.0 as i64,
+    )
+    .await;
+    // Only write new named keys. Do not alias cluster counts onto
+    // immediate_funding_share / funding_diversity — those have different
+    // dictionary meanings and frozen books must keep seeing UNKNOWN until
+    // a real funded-by adapter exists.
+    for (name, key) in [
+        ("same_slot_first10_share", "same_slot_first10_share"),
+        ("same_funder_first10_count", "same_funder_first10_count"),
+        ("first10_buyer_count", "first10_count"),
+    ] {
+        indicators.insert(name.into(), cluster.get(key).cloned().unwrap_or(Value::Null));
     }
     let reputation = sqlx::query(
         r#"SELECT sample_count,posterior,coverage
