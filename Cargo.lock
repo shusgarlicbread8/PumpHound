@@ -1462,6 +1462,8 @@ dependencies = [
  "chrono",
  "futures",
  "pumphound-domain",
+ "pumphound-protocol-pump",
+ "pumphound-protocol-pumpswap",
  "reqwest",
  "serde",
  "serde_json",
@@ -1480,15 +1482,18 @@ dependencies = [
  "axum",
  "base64",
  "chrono",
+ "clickhouse",
  "futures",
  "pumphound-chain-source",
  "pumphound-domain",
+ "pumphound-feature-core",
  "pumphound-protocol-pump",
  "pumphound-protocol-pumpswap",
  "pumphound-storage",
  "reqwest",
  "serde",
  "serde_json",
+ "sqlx",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1570,6 +1575,53 @@ dependencies = [
 ]
 
 [[package]]
+name = "pumphound-hyperliquid-research"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "pumphound-hyperliquid-twin",
+ "pumphound-venue-core",
+ "pumphound-venue-hyperliquid",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "pumphound-hyperliquid-twin"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "pumphound-venue-core",
+ "pumphound-venue-hyperliquid",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "pumphound-market-collector"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "pumphound-hyperliquid-research",
+ "pumphound-hyperliquid-twin",
+ "pumphound-storage",
+ "pumphound-venue-core",
+ "pumphound-venue-hyperliquid",
+ "pumphound-venue-ostium",
+ "pumphound-venue-polymarket",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "pumphound-market-state"
 version = "0.1.0"
 dependencies = [
@@ -1632,6 +1684,55 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "pumphound-venue-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "uuid",
+]
+
+[[package]]
+name = "pumphound-venue-hyperliquid"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "pumphound-venue-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "pumphound-venue-ostium"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "pumphound-venue-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "pumphound-venue-polymarket"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "pumphound-venue-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

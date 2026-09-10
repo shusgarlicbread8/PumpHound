@@ -11,8 +11,15 @@ members = [
     "crates/paper-core",
     "crates/execution-twin",
     "crates/api-contract",
+    "crates/venue-core",
+    "crates/venue-hyperliquid",
+    "crates/venue-ostium",
+    "crates/venue-polymarket",
+    "crates/hyperliquid-twin",
+    "crates/hyperliquid-research",
     "services/collector",
     "services/core-api",
+    "services/market-collector",
 ]
 exclude = ["apps/desktop/src-tauri"]
 
@@ -67,3 +74,9 @@ pumphound-feature-core = { path = "crates/feature-core" }
 pumphound-paper-core = { path = "crates/paper-core" }
 pumphound-execution-twin = { path = "crates/execution-twin" }
 pumphound-api-contract = { path = "crates/api-contract" }
+pumphound-venue-core = { path = "crates/venue-core" }
+pumphound-venue-hyperliquid = { path = "crates/venue-hyperliquid" }
+pumphound-venue-ostium = { path = "crates/venue-ostium" }
+pumphound-venue-polymarket = { path = "crates/venue-polymarket" }
+pumphound-hyperliquid-twin = { path = "crates/hyperliquid-twin" }
+pumphound-hyperliquid-research = { path = "crates/hyperliquid-research" }
