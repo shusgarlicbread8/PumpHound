@@ -24,6 +24,11 @@ export function HomePage() {
     queryFn: api.executionFidelity,
     refetchInterval: 10_000,
   });
+  const venues = useQuery({
+    queryKey: ["venue-health"],
+    queryFn: api.venueHealth,
+    refetchInterval: 8000,
+  });
 
   if (home.isLoading) return <div className="p-3 text-muted">Loading cockpit…</div>;
   if (home.isError || !home.data) {
@@ -64,6 +69,21 @@ export function HomePage() {
           <StatusCard key={key} label={key} value={asString(subsystems[key], "UNKNOWN")} />
         ))}
         <StatusCard label="EXECUTION TWIN" value={asString(asRecord(execution.data).state, "UNKNOWN")} />
+      </div>
+      <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+        {(["pump", "hyperliquid", "ostium", "polymarket"] as const).map((venue) => {
+          const rows = asArray(asRecord(venues.data).items)
+            .map(asRecord)
+            .filter((row) => asString(row.venue) === venue);
+          const worst = rows[0] ? asString(rows[0].state, "UNKNOWN") : venues.data ? "NO_ADAPTER" : "UNKNOWN";
+          return (
+            <StatusCard
+              key={venue}
+              label={venue.toUpperCase()}
+              value={rows.length ? rows.map((r) => `${asString(r.provider)} ${asString(r.state)}`).join(" · ") : worst}
+            />
+          );
+        })}
       </div>
       {asArray<string>(ready.reasons).length ? (
         <p className="mb-3 text-label text-negative">{asArray<string>(ready.reasons).join(" · ")}</p>

@@ -10,6 +10,8 @@ export function SystemPage() {
   const health = useQuery({ queryKey: ["health"], queryFn: api.health, refetchInterval: 2000 });
   const readiness = useQuery({ queryKey: ["readiness"], queryFn: api.readiness, refetchInterval: 2000 });
   const caps = useQuery({ queryKey: ["caps"], queryFn: api.capabilities });
+  const venues = useQuery({ queryKey: ["venue-health"], queryFn: api.venueHealth, refetchInterval: 4000 });
+  const storage = useQuery({ queryKey: ["venue-storage"], queryFn: api.venueStorage, refetchInterval: 15_000 });
   const s = status.data;
   const h = health.data;
   const layers = asRecord(readiness.data?.layers);
@@ -93,6 +95,72 @@ export function SystemPage() {
             </table>
           </div>
         )}
+      </section>
+      <section className="panel mt-3 overflow-hidden">
+        <div className="border-b border-hairline p-2">
+          <h2 className="text-header">Venue / provider health</h2>
+          <p className="text-label text-muted">Independent states. One stale venue does not mark the system down.</p>
+        </div>
+        <table className="w-full text-left text-label">
+          <thead className="text-muted">
+            <tr>
+              <th className="p-2">Venue</th>
+              <th>Provider</th>
+              <th>State</th>
+              <th>Last success</th>
+              <th>Markets</th>
+              <th>Error</th>
+            </tr>
+          </thead>
+          <tbody>
+            {asArray(asRecord(venues.data).items).map((item) => {
+              const row = asRecord(item);
+              return (
+                <tr key={`${asString(row.venue)}-${asString(row.provider)}`} className="border-t border-hairline">
+                  <td className="p-2 font-mono">{asString(row.venue)}</td>
+                  <td>{asString(row.provider)}</td>
+                  <td className="font-mono">{asString(row.state)}</td>
+                  <td className="font-mono">{asString(row.last_success_at)}</td>
+                  <td className="font-mono">{asString(row.market_count)}</td>
+                  <td className="text-negative">{asString(row.last_error, "")}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </section>
+      <section className="panel mt-3 overflow-hidden">
+        <div className="border-b border-hairline p-2">
+          <h2 className="text-header">Storage</h2>
+          <p className="text-label text-muted">MEASURED bytes now. 30d/90d only after enough elapsed time (ESTIMATED).</p>
+        </div>
+        <table className="w-full text-left text-label">
+          <thead className="text-muted">
+            <tr>
+              <th className="p-2">Venue</th>
+              <th>Measured</th>
+              <th>Per minute</th>
+              <th>Est 30d</th>
+              <th>Est 90d</th>
+              <th>Policy</th>
+            </tr>
+          </thead>
+          <tbody>
+            {asArray(asRecord(storage.data).items).map((item) => {
+              const row = asRecord(item);
+              return (
+                <tr key={asString(row.venue)} className="border-t border-hairline">
+                  <td className="p-2 font-mono">{asString(row.venue)}</td>
+                  <td className="font-mono">{asString(row.measured_bytes)}</td>
+                  <td className="font-mono">{asString(row.bytes_per_minute, "UNKNOWN")}</td>
+                  <td className="font-mono">{asString(row.estimated_30d_bytes, "UNKNOWN")}</td>
+                  <td className="font-mono">{asString(row.estimated_90d_bytes, "UNKNOWN")}</td>
+                  <td>{asString(row.retention_policy)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </section>
       <div className="mt-3 grid grid-cols-2 gap-3">
         <ProviderPanel status={s} caps={caps.data} />

@@ -11,6 +11,9 @@ import { ResearchPage } from "../features/research/ResearchPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { StrategiesPage } from "../features/strategies/StrategiesPage";
 import { SystemPage } from "../features/system/SystemPage";
+import { HyperliquidMarketPage, HyperliquidPage } from "../features/hyperliquid/HyperliquidPage";
+import { OstiumPage } from "../features/ostium/OstiumPage";
+import { PredictionPage } from "../features/prediction/PredictionPage";
 import { TokenIndex } from "../features/token/TokenIndex";
 import { TokenPage } from "../features/token/TokenPage";
 import { TradePage } from "../features/trade/TradePage";
@@ -132,6 +135,30 @@ const systemRoute = createRoute({
   component: SystemPage,
 });
 
+const hyperliquidRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/hyperliquid",
+  component: HyperliquidPage,
+});
+
+const hyperliquidMarketRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/hyperliquid/$coin",
+  component: HyperliquidMarketPage,
+});
+
+const ostiumRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/ostium",
+  component: OstiumPage,
+});
+
+const predictionRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/prediction",
+  component: PredictionPage,
+});
+
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
@@ -158,6 +185,10 @@ const routeTree = rootRoute.addChildren([
   modelsRoute,
   systemRoute,
   settingsRoute,
+  hyperliquidRoute,
+  hyperliquidMarketRoute,
+  ostiumRoute,
+  predictionRoute,
 ]);
 
 export const router = createRouter({ routeTree });

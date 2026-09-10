@@ -43,6 +43,10 @@ export function LeftNav() {
       <Item to="/models" label="Models" hint="g m" active={pathname.startsWith("/models")} expanded={expanded} />
       <Item to="/research" label="Research" active={pathname.startsWith("/research")} expanded={expanded} />
       <Item to="/replay" label="Replay" active={pathname.startsWith("/replay")} expanded={expanded} />
+      <Group label="Markets" expanded={expanded} />
+      <Item to="/hyperliquid" label="Hyperliquid" active={pathname.startsWith("/hyperliquid")} expanded={expanded} />
+      <Item to="/ostium" label="Ostium" active={pathname.startsWith("/ostium")} expanded={expanded} />
+      <Item to="/prediction" label="Prediction" active={pathname.startsWith("/prediction")} expanded={expanded} />
       <Group label="System" expanded={expanded} />
       <Item to="/system" label="Health" hint="g s" active={pathname.startsWith("/system")} expanded={expanded} />
       <Item to="/settings" label="Settings" active={pathname.startsWith("/settings")} expanded={expanded} />
@@ -64,6 +68,9 @@ function Group({ label, expanded }: { label: string; expanded: boolean }) {
 const NAV_CODES: Record<string, string> = {
   Research: "Rs",
   Replay: "Rp",
+  Hyperliquid: "HL",
+  Ostium: "Os",
+  Prediction: "Pm",
 };
 
 function Item({

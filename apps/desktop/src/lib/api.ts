@@ -212,4 +212,17 @@ export const api = {
   investigation: (id: string) => apiGet<Record<string, unknown>>(`/investigations/${encodeURIComponent(id)}`),
 
   alerts: () => apiGet<{ items: unknown[] }>("/alerts"),
+
+  venueHealth: () => apiGet<Record<string, unknown>>("/venues/health"),
+  venueStorage: () => apiGet<Record<string, unknown>>("/venues/storage"),
+  hyperliquidMarkets: () => apiGet<Record<string, unknown>>("/hyperliquid/markets"),
+  hyperliquidMarket: (id: string) =>
+    apiGet<Record<string, unknown>>(`/hyperliquid/markets/${encodeURIComponent(id)}`),
+  hyperliquidExperiments: () => apiGet<Record<string, unknown>>("/hyperliquid/experiments"),
+  hyperliquidPaper: () => apiGet<Record<string, unknown>>("/hyperliquid/paper"),
+  ostiumMarkets: () => apiGet<Record<string, unknown>>("/ostium/markets"),
+  predictionMarkets: () => apiGet<Record<string, unknown>>("/prediction/markets"),
+  predictionEvents: () => apiGet<Record<string, unknown>>("/prediction/events"),
+  predictionRelations: () => apiGet<Record<string, unknown>>("/prediction/relations"),
+  predictionBooks: () => apiGet<Record<string, unknown>>("/prediction/books"),
 };

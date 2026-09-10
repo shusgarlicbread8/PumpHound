@@ -20,6 +20,10 @@ use uuid::Uuid;
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .merge(crate::execution_routes::router())
+        .merge(crate::venue_health::router())
+        .merge(crate::hyperliquid_routes::router())
+        .merge(crate::ostium_routes::router())
+        .merge(crate::prediction_routes::router())
         .route("/api/v1/health", get(health))
         .route("/api/v1/paper/truth", get(paper_truth))
         .route("/api/v1/paper/traces/{id}", get(paper_trace))
