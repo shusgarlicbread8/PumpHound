@@ -3,10 +3,12 @@ use async_trait::async_trait;
 use chrono::Utc;
 use futures::{SinkExt, StreamExt};
 use pumphound_domain::{
-    payload_sha256, sighting_id, ChainCursor, ChainSourceError, Commitment, RawChainEnvelope,
-    RawInnerInstructions, RawInstruction, RawKind, RawTransaction, Slot, TransportMeta,
+    chain_time_from_parts, payload_sha256, sighting_id, ChainCursor, ChainSourceError, Commitment,
+    RawChainEnvelope, RawInnerInstructions, RawInstruction, RawKind, RawTransaction, Slot,
+    TransportMeta,
 };
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tokio_tungstenite::connect_async;
 use tracing::{info, warn};
@@ -155,6 +157,7 @@ impl SolanaWebsocketSource {
                         })
                         .unwrap_or_default();
                     let fetch_this = fetch_full_transactions
+                        || crate::full_tx::logs_warrant_full_transaction(&logs)
                         || (hot_fetch && crate::hot_mints::logs_mention_hot(&logs));
                     if fetch_this {
                         match fetch_transaction(&http, &self.cfg.rpc_url, sig).await {
@@ -268,38 +271,167 @@ pub fn transaction_from_logs_notification(params: &Value) -> Option<RawTransacti
     })
 }
 
+/// Compact `json` first. `jsonParsed` responses are often multi-megabyte and
+/// get truncated or rejected by the HTTP JSON decoder.
 pub async fn fetch_transaction(
     http: &reqwest::Client,
     rpc: &str,
     signature: &str,
 ) -> Result<Option<RawTransaction>, ChainSourceError> {
-    let body = json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "getTransaction",
-        "params": [
+    match fetch_transaction_encoded(http, rpc, signature, "json").await {
+        Ok(tx) => Ok(tx),
+        Err(first) => match fetch_transaction_encoded(http, rpc, signature, "jsonParsed").await {
+            Ok(tx) => Ok(tx),
+            Err(_) => Err(first),
+        },
+    }
+}
+
+async fn fetch_transaction_encoded(
+    http: &reqwest::Client,
+    rpc: &str,
+    signature: &str,
+    encoding: &str,
+) -> Result<Option<RawTransaction>, ChainSourceError> {
+    let result = rpc_result(
+        http,
+        rpc,
+        "getTransaction",
+        json!([
             signature,
             {
-                "encoding": "jsonParsed",
+                "encoding": encoding,
                 "maxSupportedTransactionVersion": 0,
                 "commitment": "confirmed"
             }
-        ]
-    });
-    let res = http
-        .post(rpc)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| ChainSourceError::Transport(e.to_string()))?;
-    let v: Value = res
-        .json()
-        .await
-        .map_err(|e| ChainSourceError::Transport(e.to_string()))?;
-    let Some(result) = v.get("result").filter(|r| !r.is_null()) else {
+        ]),
+    )
+    .await?;
+    if result.is_null() {
         return Ok(None);
-    };
-    Ok(Some(parse_transaction(signature, result)))
+    }
+    Ok(Some(parse_transaction(signature, &result)))
+}
+
+pub async fn fetch_block_time(
+    http: &reqwest::Client,
+    rpc: &str,
+    slot: u64,
+) -> Result<Option<chrono::DateTime<Utc>>, ChainSourceError> {
+    let result = rpc_result(http, rpc, "getBlockTime", json!([slot])).await?;
+    Ok(block_time_from_rpc(&result))
+}
+
+pub async fn fetch_block_times(
+    http: &reqwest::Client,
+    rpc: &str,
+    slots: &[u64],
+) -> Result<HashMap<u64, chrono::DateTime<Utc>>, ChainSourceError> {
+    let mut out = HashMap::new();
+    let chunks = slots.chunks(25).collect::<Vec<_>>();
+    for (index, chunk) in chunks.into_iter().enumerate() {
+        let batch: Vec<Value> = chunk
+            .iter()
+            .map(|slot| {
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": slot,
+                    "method": "getBlockTime",
+                    "params": [slot]
+                })
+            })
+            .collect();
+        let bytes = rpc_post(http, rpc, &Value::Array(batch)).await?;
+        let values: Vec<Value> = serde_json::from_slice(&bytes).map_err(|e| {
+            ChainSourceError::Transport(format!("invalid JSON ({e}): {}", body_preview(&bytes)))
+        })?;
+        for value in values {
+            if value.get("error").is_some() {
+                continue;
+            }
+            let Some(slot) = value.get("id").and_then(Value::as_u64) else {
+                continue;
+            };
+            if let Some(time) = block_time_from_rpc(value.get("result").unwrap_or(&Value::Null)) {
+                out.insert(slot, time);
+            }
+        }
+        if (index + 1) % 20 == 0 {
+            info!(
+                done = index + 1,
+                resolved = out.len(),
+                "getBlockTime batch progress"
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    }
+    Ok(out)
+}
+
+pub async fn rpc_result(
+    http: &reqwest::Client,
+    rpc: &str,
+    method: &str,
+    params: Value,
+) -> Result<Value, ChainSourceError> {
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
+    let bytes = rpc_post(http, rpc, &body).await?;
+    let value: Value = serde_json::from_slice(&bytes).map_err(|e| {
+        ChainSourceError::Transport(format!("invalid JSON ({e}): {}", body_preview(&bytes)))
+    })?;
+    if let Some(error) = value.get("error") {
+        return Err(ChainSourceError::Transport(format!(
+            "JSON-RPC error: {error}"
+        )));
+    }
+    Ok(value.get("result").cloned().unwrap_or(Value::Null))
+}
+
+async fn rpc_post(
+    http: &reqwest::Client,
+    rpc: &str,
+    body: &Value,
+) -> Result<Vec<u8>, ChainSourceError> {
+    let mut last = String::new();
+    for attempt in 0..6 {
+        let response = http
+            .post(rpc)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| ChainSourceError::Transport(e.to_string()))?;
+        let status = response.status();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| ChainSourceError::Transport(e.to_string()))?;
+        if status.as_u16() == 429 || status.is_server_error() {
+            last = format!("HTTP {status}: {}", body_preview(&bytes));
+            let delay = 1_000u64.saturating_mul(1u64 << attempt.min(4)).min(20_000);
+            warn!(attempt, delay_ms = delay, %last, "RPC backing off");
+            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            continue;
+        }
+        if !status.is_success() {
+            return Err(ChainSourceError::Transport(format!(
+                "HTTP {status}: {}",
+                body_preview(&bytes)
+            )));
+        }
+        return Ok(bytes.to_vec());
+    }
+    Err(ChainSourceError::Transport(last))
+}
+
+fn block_time_from_rpc(result: &Value) -> Option<chrono::DateTime<Utc>> {
+    let ts = result.as_i64()?;
+    chain_time_from_parts(chrono::DateTime::from_timestamp(ts, 0), None)
+}
+
+fn body_preview(bytes: &[u8]) -> String {
+    const LIMIT: usize = 180;
+    let end = bytes.len().min(LIMIT);
+    String::from_utf8_lossy(&bytes[..end]).replace('\n', " ")
 }
 
 pub fn parse_transaction(signature: &str, result: &Value) -> RawTransaction {
@@ -307,7 +439,8 @@ pub fn parse_transaction(signature: &str, result: &Value) -> RawTransaction {
     let block_time = result
         .get("blockTime")
         .and_then(|t| t.as_i64())
-        .map(|t| chrono::DateTime::from_timestamp(t, 0).unwrap_or_else(Utc::now));
+        .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
+        .and_then(|t| chain_time_from_parts(Some(t), None));
     let meta = result.get("meta").cloned().unwrap_or(json!({}));
     let msg = result
         .pointer("/transaction/message")
@@ -529,5 +662,18 @@ mod tests {
         assert_eq!(tx.log_messages.len(), 3);
         assert!(tx.block_time.is_none());
         assert!(tx.instructions.is_empty());
+    }
+
+    #[test]
+    fn parse_transaction_drops_impossible_block_times() {
+        let result = json!({
+            "slot": 100,
+            "blockTime": 10_409_356_800i64,
+            "transaction": {"message": {"accountKeys": ["11111111111111111111111111111111"]}},
+            "meta": {"err": null, "logMessages": []}
+        });
+        let tx = parse_transaction("sig", &result);
+        assert!(tx.block_time.is_none());
+        assert_eq!(tx.slot, Slot(100));
     }
 }

@@ -20,18 +20,25 @@ path = "src/bin/verify_live.rs"
 name = "verify-archive"
 path = "src/bin/verify_archive.rs"
 
+[[bin]]
+name = "repair-evidence"
+path = "src/bin/repair_evidence.rs"
+
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
+clickhouse.workspace = true
 futures.workspace = true
 pumphound-chain-source.workspace = true
 pumphound-domain.workspace = true
 pumphound-protocol-pump.workspace = true
 pumphound-protocol-pumpswap.workspace = true
+pumphound-feature-core.workspace = true
 pumphound-storage.workspace = true
 serde.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
+sqlx.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

@@ -49,6 +49,13 @@ services:
       - ./db/postgres/017_execution_twin.sql:/docker-entrypoint-initdb.d/017_execution_twin.sql:ro
       - ./db/postgres/018_paper_loop_hot_path_indexes.sql:/docker-entrypoint-initdb.d/018_paper_loop_hot_path_indexes.sql:ro
       - ./db/postgres/019_exec_select.sql:/docker-entrypoint-initdb.d/019_exec_select.sql:ro
+      - ./db/postgres/020_evidence_layer.sql:/docker-entrypoint-initdb.d/020_evidence_layer.sql:ro
+      - ./db/postgres/021_evidence_calibration.sql:/docker-entrypoint-initdb.d/021_evidence_calibration.sql:ro
+      - ./db/postgres/022_multi_market_core.sql:/docker-entrypoint-initdb.d/022_multi_market_core.sql:ro
+      - ./db/postgres/023_hyperliquid_research.sql:/docker-entrypoint-initdb.d/023_hyperliquid_research.sql:ro
+      - ./db/postgres/024_hyperliquid_paper.sql:/docker-entrypoint-initdb.d/024_hyperliquid_paper.sql:ro
+      - ./db/postgres/025_ostium_observation.sql:/docker-entrypoint-initdb.d/025_ostium_observation.sql:ro
+      - ./db/postgres/026_prediction_markets.sql:/docker-entrypoint-initdb.d/026_prediction_markets.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U pumphound -d pumphound"]
       interval: 3s
@@ -70,6 +77,7 @@ services:
       - /Users/shubhamkumar/PumpHoundFastData/clickhouse:/var/lib/clickhouse
       - ./db/clickhouse/001_events.sql:/docker-entrypoint-initdb.d/001_events.sql:ro
       - ./db/clickhouse/002_insert_buffering.sql:/docker-entrypoint-initdb.d/002_insert_buffering.sql:ro
+      - ./db/clickhouse/003_multi_market.sql:/docker-entrypoint-initdb.d/003_multi_market.sql:ro
       - ./db/clickhouse/config.d/memory.xml:/etc/clickhouse-server/config.d/memory.xml:ro
     ulimits:
       nofile:

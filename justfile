@@ -75,6 +75,18 @@ backfill-history-estimate config:
 backfill-history-redecode config:
     cargo run -p pumphound-collector --bin backfill -- --redecode {{config}}
 
+# Apply one additive SQL file to the running Compose Postgres.
+apply-sql file:
+    docker compose exec -T postgres psql -U pumphound -d pumphound -v ON_ERROR_STOP=1 < {{file}}
+
+# Repair the live evidence layer: identities, launch times, PumpSwap, mint backfill, snapshots.
+repair-evidence *args:
+    cargo run -p pumphound-collector --bin repair-evidence -- {{args}}
+
+# 90-day recent Pump/PumpSwap corpus (file archive). Import into the live store with repair-evidence.
+backfill-history-recent:
+    just backfill-history configs/history-recent-90d.json
+
 # Compatibility alias for the historical corpus backfill.
 backfill config:
     just backfill-history {{config}}
@@ -153,6 +165,13 @@ verify:
     cargo test --workspace --exclude pumphound-desktop
     uv run pytest tests/python -q --ignore=tests/python/test_investigator_grounding.py
     pnpm --filter @pumphound/desktop exec tsc --noEmit
+
+# Isolated non-Solana collector. Does not use Helius.
+market-collector:
+    cargo run -p pumphound-market-collector --bin pumphound-market-collector
+
+apply-ch file:
+    curl -sS "http://127.0.0.1:8123/?user=${PUMPHOUND_CLICKHOUSE_USER:-pumphound}&password=${PUMPHOUND_CLICKHOUSE_PASSWORD:-pumphound}" --data-binary @{{file}}
 
 verify-live:
     cargo run -p pumphound-collector --bin verify-live

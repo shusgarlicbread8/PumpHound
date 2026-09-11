@@ -27,7 +27,7 @@ async fn main() -> anyhow::Result<()> {
     let source_cfg = SourceConfig::from_env();
     let rpc_url = source_cfg.rpc_url.clone();
     let upgrade_http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
         .build()
         .context("hot-set transaction client")?;
     println!("{}", source_cfg.label());
@@ -55,6 +55,10 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let stores = Stores::connect().await.context("stores")?;
+    match pumphound_collector::evidence::load_identity_cache(&stores).await {
+        Ok(identities) => info!(identities, "loaded PumpSwap pool identity cache"),
+        Err(error) => warn!(%error, "pool identity cache unavailable; logs-only PumpSwap trades stay quarantined until a create/full tx arrives"),
+    }
     let cursor = stores
         .load_checkpoint("solana-ws", "pump-programs")
         .await
@@ -261,9 +265,15 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         let mut events = decode_events(&transaction, &pump, &pumpswap, &replay_canonical);
+        for event in &events {
+            pumphound_protocol_pumpswap::remember_from_event(event);
+        }
         let logs_only =
             transaction.instructions.is_empty() && transaction.inner_instructions.is_empty();
-        if logs_only && events.iter().any(event_mentions_hot_mint) {
+        let needs_full_tx = logs_only
+            && (events.iter().any(event_mentions_hot_mint)
+                || events.iter().any(needs_identity_or_chain_time_upgrade));
+        if needs_full_tx {
             hot_upgrade_attempts += 1;
             let mut upgraded = None;
             for attempt in 0..3 {
@@ -342,6 +352,7 @@ async fn main() -> anyhow::Result<()> {
                         // published by this collector process.
                         for event in &mut events {
                             event.revision = event.revision.max(2);
+                            pumphound_protocol_pumpswap::remember_from_event(event);
                         }
                         hot_upgrade_successes += 1;
                     }
@@ -463,6 +474,19 @@ fn decode_events(
         }
     }
     events
+}
+
+fn needs_identity_or_chain_time_upgrade(event: &ChainEvent) -> bool {
+    match &event.payload {
+        pumphound_domain::ChainEventPayload::LaunchCreated(_) => event.block_time.is_none(),
+        pumphound_domain::ChainEventPayload::DecodeQuarantined(value) => {
+            pumphound_protocol_pumpswap::unresolved_pool_from_reason(&value.reason)
+                .is_some_and(|pool| {
+                    pumphound_protocol_pumpswap::lookup_pool_identity(&pool).is_none()
+                })
+        }
+        _ => false,
+    }
 }
 
 fn event_mentions_hot_mint(event: &ChainEvent) -> bool {

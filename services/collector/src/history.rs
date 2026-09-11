@@ -844,7 +844,7 @@ impl RpcClient {
                 json!([
                     signature,
                     {
-                        "encoding":"jsonParsed",
+                        "encoding":"json",
                         "maxSupportedTransactionVersion":config.max_supported_transaction_version,
                         "commitment":"finalized"
                     }

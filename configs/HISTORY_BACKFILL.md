@@ -22,6 +22,15 @@ Run the bounded 25k-launch target:
 just backfill-history configs/history-large-25k.json
 ```
 
+Collect the last 90 days as complete weekly windows, then import into the live
+store and repair launch times / PumpSwap identity / decision-age snapshots:
+
+```sh
+just backfill-history-recent
+just apply-sql db/postgres/020_evidence_layer.sql
+just repair-evidence
+```
+
 Re-run the current official decoders over the saved raw archive without making
 provider calls:
 

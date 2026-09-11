@@ -202,12 +202,18 @@ pub async fn persist_shadow_predictions(
         let probability = prediction.probabilities.get(target).copied().flatten();
         let abstention_reason = prediction_abstention_reason(prediction, target, probability);
         let familiarity = prediction.familiarity.get(target).copied().flatten();
+        // Unqualified DO NOTHING, not `ON CONFLICT (feature_snapshot_id,model_version)`: this
+        // table has two independent unique constraints (the prediction_id PK and that pair), and
+        // naming only one as the conflict target left a collision on the *other* — a genuine,
+        // observed "duplicate key value violates ... model_predictions_pkey" surfacing as an
+        // uncaught error instead of the no-op this call site clearly intends. Unqualified DO
+        // NOTHING catches a violation of either.
         sqlx::query(
             r#"INSERT INTO pumphound.model_predictions
                (prediction_id,feature_snapshot_id,launch_id,model_version,calibrated,familiarity,
                 outputs,abstention_reason,computed_at,payload)
                VALUES ($1,$2,$3,$4,false,$5,$6,$7,now(),$8)
-               ON CONFLICT (feature_snapshot_id,model_version) DO NOTHING"#,
+               ON CONFLICT DO NOTHING"#,
         )
         .bind(format!("{}:shadow:{target}", prediction.prediction_id))
         .bind(&prediction.feature_snapshot_id)
@@ -888,12 +894,16 @@ pub async fn persist_predictions(
             .flatten()
             .ok_or_else(|| anyhow::anyhow!("missing familiarity for {target}"))?;
         let target_prediction_id = format!("{}:{target}", prediction.prediction_id);
+        // Unqualified DO NOTHING: see the matching comment on the shadow-prediction insert above
+        // — this table's prediction_id PK and its (feature_snapshot_id,model_version) unique
+        // constraint are independent, and naming only one as the conflict target left a
+        // collision on the other surfacing as an uncaught error instead of a no-op.
         sqlx::query(
             r#"INSERT INTO pumphound.model_predictions
                (prediction_id,feature_snapshot_id,launch_id,model_version,calibrated,familiarity,
                 outputs,abstention_reason,computed_at,payload)
                VALUES ($1,$2,$3,$4,true,$5,$6,NULL,now(),$7)
-               ON CONFLICT (feature_snapshot_id,model_version) DO NOTHING"#,
+               ON CONFLICT DO NOTHING"#,
         )
         .bind(target_prediction_id)
         .bind(&prediction.feature_snapshot_id)

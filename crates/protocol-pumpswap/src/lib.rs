@@ -1,17 +1,20 @@
 use pumphound_domain::{
     event_id, AssetAmount, Atomic, Canonicality, ChainEvent, ChainEventPayload, Commitment,
     DecodeError, DecodeQuarantined, EventAction, EventEnvelope, FeeComponent, FeeKind,
-    LaunchCreated, LaunchpadDecoder, LiquidityChanged, LiquidityDirection, Protocol, Provenance,
-    Pubkey, RawTransaction, TradeExecuted, TradeSide, CHAIN, SCHEMA_VERSION,
+    LaunchCreated, LaunchpadDecoder, LiquidityChanged, LiquidityDirection,
+    Protocol, Provenance, Pubkey, RawTransaction, TradeExecuted, TradeSide, CHAIN, SCHEMA_VERSION,
 };
 use pumphound_protocol_pump::BorshCursor;
 use serde_json::json;
+use std::collections::HashMap;
+use std::sync::{OnceLock, RwLock};
 
 pub const PROGRAM_ID: &str = pumphound_domain::PUMPSWAP_PROGRAM_ID;
 pub const IDL_SHA256: &str = "e18072707bd59afd1fca2245a18b48eee40c64904f2b34aa84100a0f014ddbe0";
 pub const DECODER_VERSION: &str = pumphound_domain::DECODER_VERSION;
 
-const CREATE_POOL: [u8; 8] = [177, 49, 12, 210, 160, 118, 167, 116];
+pub const CREATE_POOL_DISCRIMINATOR: [u8; 8] = [177, 49, 12, 210, 160, 118, 167, 116];
+const CREATE_POOL: [u8; 8] = CREATE_POOL_DISCRIMINATOR;
 const BUY: [u8; 8] = [103, 244, 82, 31, 44, 245, 119, 119];
 const SELL: [u8; 8] = [62, 47, 55, 10, 165, 3, 220, 42];
 const DEPOSIT: [u8; 8] = [120, 248, 61, 83, 31, 142, 107, 144];
@@ -98,6 +101,197 @@ impl LaunchpadDecoder for PumpSwapDecoder {
             }
         }
         Ok(out)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CachedPoolIdentity {
+    pub pool_base_mint: Pubkey,
+    pub pool_quote_mint: Pubkey,
+    pub pool_quote_decimals: u8,
+    pub token_mint: Pubkey,
+    pub quote_mint: Pubkey,
+    pub token_decimals: u8,
+    pub quote_decimals: u8,
+    pub reversed: bool,
+}
+
+impl From<CachedPoolIdentity> for PoolIdentity {
+    fn from(value: CachedPoolIdentity) -> Self {
+        PoolIdentity {
+            pool_base_mint: value.pool_base_mint,
+            pool_quote_mint: value.pool_quote_mint,
+            pool_quote_decimals: value.pool_quote_decimals,
+            token_mint: value.token_mint,
+            quote_mint: value.quote_mint,
+            token_decimals: value.token_decimals,
+            quote_decimals: value.quote_decimals,
+            reversed: value.reversed,
+        }
+    }
+}
+
+impl From<PoolIdentity> for CachedPoolIdentity {
+    fn from(value: PoolIdentity) -> Self {
+        Self {
+            pool_base_mint: value.pool_base_mint,
+            pool_quote_mint: value.pool_quote_mint,
+            pool_quote_decimals: value.pool_quote_decimals,
+            token_mint: value.token_mint,
+            quote_mint: value.quote_mint,
+            token_decimals: value.token_decimals,
+            quote_decimals: value.quote_decimals,
+            reversed: value.reversed,
+        }
+    }
+}
+
+fn identity_store() -> &'static RwLock<HashMap<String, CachedPoolIdentity>> {
+    static STORE: OnceLock<RwLock<HashMap<String, CachedPoolIdentity>>> = OnceLock::new();
+    STORE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+pub fn remember_pool_identity(pool: &str, identity: CachedPoolIdentity) {
+    if pool.len() < 32 {
+        return;
+    }
+    if let Ok(mut guard) = identity_store().write() {
+        guard.insert(pool.to_string(), identity);
+    }
+}
+
+pub fn lookup_pool_identity(pool: &str) -> Option<CachedPoolIdentity> {
+    identity_store()
+        .read()
+        .ok()
+        .and_then(|guard| guard.get(pool).copied())
+}
+
+pub fn replace_pool_identities(rows: impl IntoIterator<Item = (String, CachedPoolIdentity)>) {
+    if let Ok(mut guard) = identity_store().write() {
+        *guard = rows
+            .into_iter()
+            .filter(|(pool, _)| pool.len() >= 32)
+            .collect();
+    }
+}
+
+pub fn clear_pool_identities() {
+    if let Ok(mut guard) = identity_store().write() {
+        guard.clear();
+    }
+}
+
+pub fn cached_identity_count() -> usize {
+    identity_store()
+        .read()
+        .map(|guard| guard.len())
+        .unwrap_or(0)
+}
+
+pub fn unresolved_pool_from_reason(reason: &str) -> Option<String> {
+    reason
+        .split("pool=")
+        .nth(1)
+        .and_then(|suffix| suffix.split_whitespace().next())
+        .filter(|pool| pool.len() >= 32)
+        .map(str::to_string)
+}
+
+pub fn remember_from_event(event: &ChainEvent) {
+    match &event.payload {
+        ChainEventPayload::LaunchCreated(created) if event.protocol == Protocol::PumpSwap => {
+            let reversed = created
+                .protocol_flags
+                .get("orientation_normalized")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            let pool_base = created
+                .protocol_flags
+                .get("pool_base_mint")
+                .and_then(|value| value.as_str())
+                .and_then(|value| Pubkey::from_base58(value).ok())
+                .unwrap_or(if reversed {
+                    created.quote_mint
+                } else {
+                    created.mint
+                });
+            let pool_quote = created
+                .protocol_flags
+                .get("pool_quote_mint")
+                .and_then(|value| value.as_str())
+                .and_then(|value| Pubkey::from_base58(value).ok())
+                .unwrap_or(if reversed {
+                    created.mint
+                } else {
+                    created.quote_mint
+                });
+            remember_pool_identity(
+                &created.market.to_string(),
+                CachedPoolIdentity {
+                    pool_base_mint: pool_base,
+                    pool_quote_mint: pool_quote,
+                    pool_quote_decimals: if reversed {
+                        created.base_decimals
+                    } else {
+                        created.quote_decimals
+                    },
+                    token_mint: created.mint,
+                    quote_mint: created.quote_mint,
+                    token_decimals: created.base_decimals,
+                    quote_decimals: created.quote_decimals,
+                    reversed,
+                },
+            );
+        }
+        ChainEventPayload::TradeExecuted(trade) => {
+            let Some(pool_base) = trade
+                .raw_event
+                .get("pool_base_mint")
+                .and_then(|value| value.as_str())
+                .and_then(|value| Pubkey::from_base58(value).ok())
+            else {
+                return;
+            };
+            let Some(pool_quote) = trade
+                .raw_event
+                .get("pool_quote_mint")
+                .and_then(|value| value.as_str())
+                .and_then(|value| Pubkey::from_base58(value).ok())
+            else {
+                return;
+            };
+            let token_decimals = trade
+                .raw_event
+                .get("token_decimals")
+                .and_then(|value| value.as_u64())
+                .and_then(|value| u8::try_from(value).ok())
+                .unwrap_or(6);
+            let quote_decimals = trade
+                .raw_event
+                .get("quote_decimals")
+                .and_then(|value| value.as_u64())
+                .and_then(|value| u8::try_from(value).ok())
+                .unwrap_or_else(|| default_decimals(trade.quote_mint));
+            remember_pool_identity(
+                &trade.market.to_string(),
+                normalize_pool_identity(pool_base, pool_quote, token_decimals, quote_decimals)
+                    .into(),
+            );
+        }
+        ChainEventPayload::LaunchMigrated(migrated) => {
+            remember_pool_identity(
+                &migrated.new_market.to_string(),
+                normalize_pool_identity(
+                    migrated.mint,
+                    migrated.quote_mint,
+                    6,
+                    default_decimals(migrated.quote_mint),
+                )
+                .into(),
+            );
+        }
+        _ => {}
     }
 }
 
@@ -196,7 +390,7 @@ fn decode_one(
     let ok = tx.err.is_none();
     match disc {
         CREATE_POOL => {
-            let _ts = c.i64()?;
+            let ts = c.i64()?;
             let _index = c.u16()?;
             let creator = c.pubkey()?;
             let pool_base_mint = c.pubkey()?;
@@ -223,8 +417,9 @@ fn decode_one(
                 pool_base_decimals,
                 pool_quote_decimals,
             );
+            remember_pool_identity(&pool.to_string(), identity.into());
             let (token_reserve, quote_reserve) = identity.orient(pool_base, pool_quote);
-            Ok(Some(wrap(
+            Ok(Some(wrap_at(
                 tx,
                 event_index,
                 ChainEventPayload::LaunchCreated(LaunchCreated {
@@ -245,6 +440,7 @@ fn decode_one(
                         "pool_base_mint": pool_base_mint.to_string(),
                         "pool_quote_mint": pool_quote_mint.to_string(),
                         "orientation_normalized": identity.reversed,
+                        "event_timestamp": ts,
                     }),
                     virtual_base_atomic: Some(Atomic(0)),
                     // PumpSwap uses real pool reserves. MarketSnapshot has one
@@ -253,6 +449,7 @@ fn decode_one(
                     virtual_quote_atomic: Some(quote_reserve),
                     real_base_atomic: Some(token_reserve),
                 }),
+                Some(ts),
             )))
         }
         BUY | SELL => {
@@ -260,7 +457,7 @@ fn decode_one(
                 return Ok(None);
             }
             let is_buy = disc == BUY;
-            let _ts = c.i64()?;
+            let ts = c.i64()?;
             let base_amt = c.atomic_u64()?;
             let _limit = c.u64()?;
             let _ = c.u64()?;
@@ -328,11 +525,17 @@ fn decode_one(
                     ),
                 )
             };
-            let Some(identity) = pool_identity_from_transaction(tx, pool, user) else {
-                return Err(DecodeError::IncompatibleLayout(format!(
-                    "pump_swap_identity_unresolved pool={pool} full_transaction_required"
-                )));
-            };
+            let (identity, identity_source) =
+                if let Some(identity) = pool_identity_from_transaction(tx, pool, user) {
+                    remember_pool_identity(&pool.to_string(), identity.into());
+                    (identity, "transaction_instruction_accounts")
+                } else if let Some(cached) = lookup_pool_identity(&pool.to_string()) {
+                    (cached.into(), "pool_identity_cache")
+                } else {
+                    return Err(DecodeError::IncompatibleLayout(format!(
+                        "pump_swap_identity_unresolved pool={pool} full_transaction_required"
+                    )));
+                };
             let (token_amount, quote_amount) = identity.orient(base_amt, quote);
             let (token_reserve, quote_reserve) = identity.orient(pool_base_post, pool_quote_post);
             let (pre_token_reserve, pre_quote_reserve) = identity.orient(pool_base, pool_quote);
@@ -354,7 +557,7 @@ fn decode_one(
                 .unwrap_or(user);
             let fee_decimals = token_decimals(tx, identity.pool_quote_mint)
                 .unwrap_or(identity.pool_quote_decimals);
-            Ok(Some(wrap(
+            Ok(Some(wrap_at(
                 tx,
                 event_index,
                 ChainEventPayload::TradeExecuted(TradeExecuted {
@@ -398,7 +601,7 @@ fn decode_one(
                     real_base_atomic: Some(token_reserve),
                     real_quote_atomic: Some(quote_reserve),
                     raw_event: json!({
-                        "identity_source": "transaction_instruction_accounts",
+                        "identity_source": identity_source,
                         "pool_base_mint": identity.pool_base_mint.to_string(),
                         "pool_quote_mint": identity.pool_quote_mint.to_string(),
                         "token_decimals": identity.token_decimals,
@@ -426,13 +629,14 @@ fn decode_one(
                     base_supply_atomic: boost.base_supply.map(|v| Atomic(v as u128)),
                     cashback_fee_bps: boost.cashback_bps,
                 }),
+                Some(ts),
             )))
         }
         DEPOSIT | WITHDRAW => {
             if !ok {
                 return Ok(None);
             }
-            let _ts = c.i64()?;
+            let ts = c.i64()?;
             let _ = c.u64()?;
             let _ = c.u64()?;
             let _ = c.u64()?;
@@ -445,13 +649,18 @@ fn decode_one(
             let _ = c.u64()?;
             let pool = c.pubkey()?;
             let user = c.pubkey()?;
-            let Some(identity) = pool_identity_from_transaction(tx, pool, user) else {
+            let Some(identity) = pool_identity_from_transaction(tx, pool, user)
+                .or_else(|| lookup_pool_identity(&pool.to_string()).map(Into::into))
+            else {
                 return Err(DecodeError::IncompatibleLayout(format!(
                     "pump_swap_identity_unresolved pool={pool} full_transaction_required"
                 )));
             };
+            if pool_identity_from_transaction(tx, pool, user).is_some() {
+                remember_pool_identity(&pool.to_string(), identity.into());
+            }
             let (base_delta, quote_delta) = identity.orient(base_in, quote_in);
-            Ok(Some(wrap(
+            Ok(Some(wrap_at(
                 tx,
                 event_index,
                 ChainEventPayload::LiquidityChanged(LiquidityChanged {
@@ -471,6 +680,7 @@ fn decode_one(
                         "withdraw".into()
                     },
                 }),
+                Some(ts),
             )))
         }
         other if NON_MARKET_EVENTS.contains(&other) => Ok(None),
@@ -632,6 +842,15 @@ fn quarantine(
 }
 
 fn wrap(tx: &RawTransaction, event_index: u32, payload: ChainEventPayload) -> ChainEvent {
+    wrap_at(tx, event_index, payload, None)
+}
+
+fn wrap_at(
+    tx: &RawTransaction,
+    event_index: u32,
+    payload: ChainEventPayload,
+    event_ts: Option<i64>,
+) -> ChainEvent {
     EventEnvelope {
         schema_version: SCHEMA_VERSION,
         event_id: event_id(CHAIN, &tx.signature, PROGRAM_ID, &[0], event_index),
@@ -646,7 +865,7 @@ fn wrap(tx: &RawTransaction, event_index: u32, payload: ChainEventPayload) -> Ch
         tx_index: tx.transaction_index,
         instruction_path: vec![0],
         event_index,
-        block_time: tx.block_time,
+        block_time: pumphound_domain::chain_time_from_parts(tx.block_time, event_ts),
         observed_at: pumphound_domain::now_utc(),
         computed_at: pumphound_domain::now_utc(),
         available_from_slot: tx.slot,
@@ -797,7 +1016,17 @@ mod tests {
 
     #[test]
     fn logs_only_trade_is_quarantined_instead_of_using_pool_as_mint() {
-        let pool = key(1);
+        // A dedicated pool key (not `key(1)`, which other tests in this module also use as their
+        // pool and — via `decode()`'s own auto-caching on a resolved identity, or an explicit
+        // `remember_pool_identity` call — populate in the same process-global `identity_store`).
+        // `cargo test` runs this file's tests in parallel by default; sharing `key(1)` here made
+        // `clear_pool_identities()` racy against whichever of those tests happened to run at the
+        // same moment, intermittently finding a just-cached identity instead of the empty cache
+        // this test requires (confirmed: this test always passes alone, only flakes in the full
+        // suite). A pool value no other test in this file touches removes the race entirely,
+        // rather than trying to serialize against tests that have no reason to know about it.
+        clear_pool_identities();
+        let pool = key(200);
         let user = key(2);
         let events = PumpSwapDecoder::default()
             .decode(&raw_tx(modern_sell_event(pool, user), vec![]))
@@ -808,6 +1037,33 @@ mod tests {
         };
         assert!(quarantine.reason.contains("pump_swap_identity_unresolved"));
         assert!(quarantine.reason.contains(&format!("pool={pool}")));
+    }
+
+    #[test]
+    fn cached_pool_identity_resolves_logs_only_trade() {
+        clear_pool_identities();
+        let pool = key(1);
+        let user = key(2);
+        let token = key(3);
+        let wsol = Pubkey::from_base58(pumphound_domain::WSOL_MINT).unwrap();
+        remember_pool_identity(
+            &pool.to_string(),
+            normalize_pool_identity(wsol, token, 9, 6).into(),
+        );
+        let events = PumpSwapDecoder::default()
+            .decode(&raw_tx(modern_sell_event(pool, user), vec![]))
+            .unwrap();
+        let ChainEventPayload::TradeExecuted(trade) = &events[0].payload else {
+            panic!("cached identity must decode the logs-only trade");
+        };
+        assert_eq!(trade.mint, token);
+        assert_eq!(trade.quote_mint, wsol);
+        assert_eq!(trade.raw_event["identity_source"], "pool_identity_cache");
+        assert!(
+            events[0].block_time.is_none(),
+            "fixture event unix=1 is pre-Pump and must not become block_time"
+        );
+        clear_pool_identities();
     }
 
     #[test]

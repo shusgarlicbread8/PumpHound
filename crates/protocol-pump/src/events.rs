@@ -10,10 +10,12 @@ use pumphound_domain::{
 use serde_json::json;
 use uuid::Uuid;
 
-const CREATE: [u8; 8] = [27, 114, 169, 77, 222, 235, 99, 118];
+pub const CREATE_DISCRIMINATOR: [u8; 8] = [27, 114, 169, 77, 222, 235, 99, 118];
+const CREATE: [u8; 8] = CREATE_DISCRIMINATOR;
 const TRADE: [u8; 8] = [189, 219, 127, 211, 78, 230, 97, 238];
 const COMPLETE: [u8; 8] = [95, 114, 97, 156, 212, 46, 152, 8];
-const MIGRATE: [u8; 8] = [189, 233, 93, 185, 92, 148, 234, 148];
+pub const MIGRATE_DISCRIMINATOR: [u8; 8] = [189, 233, 93, 185, 92, 148, 234, 148];
+const MIGRATE: [u8; 8] = MIGRATE_DISCRIMINATOR;
 // Non-market events from official @pump-fun/pump-sdk 1.36.0. They remain in
 // raw sightings but do not belong in canonical market or decoder-failure data.
 const NON_MARKET_EVENTS: [[u8; 8]; 19] = [
@@ -156,7 +158,7 @@ fn decode_one(
             let _user = c.pubkey()?;
             let mint = c.pubkey()?;
             let bonding_curve = c.pubkey()?;
-            let _ = c.i64()?;
+            let ts = c.i64()?;
             match c.remaining() {
                 0 => {}
                 32 => {
@@ -168,7 +170,7 @@ fn decode_one(
                     )));
                 }
             }
-            Ok(Some(wrap(
+            Ok(Some(wrap_at(
                 tx,
                 event_index,
                 ChainEventPayload::LaunchCompleted(LaunchCompleted {
@@ -176,6 +178,7 @@ fn decode_one(
                     mint,
                     market: bonding_curve,
                 }),
+                Some(ts),
             )))
         }
         MIGRATE => {
@@ -189,11 +192,11 @@ fn decode_one(
             let _sol_amount = c.u64()?;
             let _fee = c.u64()?;
             let bonding_curve = c.pubkey()?;
-            let _ = c.i64()?;
+            let ts = c.i64()?;
             let pool = c.pubkey()?;
             let quote_mint = normalize_quote_mint(c.pubkey()?);
             require_consumed(&c, "migration event")?;
-            Ok(Some(wrap(
+            Ok(Some(wrap_at(
                 tx,
                 event_index,
                 ChainEventPayload::LaunchMigrated(LaunchMigrated {
@@ -203,6 +206,7 @@ fn decode_one(
                     new_market: pool,
                     quote_mint,
                 }),
+                Some(ts),
             )))
         }
         other if NON_MARKET_EVENTS.contains(&other) => Ok(None),
@@ -223,6 +227,7 @@ fn decode_create(
     let bonding_curve = c.pubkey()?;
     let user = c.pubkey()?;
 
+    let mut event_ts = None;
     let created = if c.remaining() == 0 {
         let quote_mint =
             Pubkey::from_base58(pumphound_domain::WSOL_MINT).expect("static WSOL mint");
@@ -251,7 +256,8 @@ fn decode_create(
         }
     } else {
         let creator = c.pubkey()?;
-        let _ts = c.i64()?;
+        let ts = c.i64()?;
+        event_ts = Some(ts);
         let virtual_token = c.atomic_u64()?;
         let virtual_sol = c.atomic_u64()?;
         let real_token = c.atomic_u64()?;
@@ -279,6 +285,7 @@ fn decode_create(
                 "is_cashback_enabled": is_cashback,
                 "token_program": token_program.to_string(),
                 "user": user.to_string(),
+                "event_timestamp": ts,
             }),
             virtual_base_atomic: Some(virtual_token),
             virtual_quote_atomic: Some(if virtual_quote.is_zero() {
@@ -289,10 +296,11 @@ fn decode_create(
             real_base_atomic: Some(real_token),
         }
     };
-    Ok(wrap(
+    Ok(wrap_at(
         tx,
         event_index,
         ChainEventPayload::LaunchCreated(created),
+        event_ts,
     ))
 }
 
@@ -336,7 +344,7 @@ fn decode_trade(
         let quote_mint =
             Pubkey::from_base58(pumphound_domain::WSOL_MINT).expect("static WSOL mint");
         let market = market_for_mint(tx, &mint).unwrap_or(mint);
-        return Ok(wrap(
+        return Ok(wrap_at(
             tx,
             event_index,
             ChainEventPayload::TradeExecuted(TradeExecuted {
@@ -375,6 +383,7 @@ fn decode_trade(
                 base_supply_atomic: None,
                 cashback_fee_bps: None,
             }),
+            Some(timestamp),
         ));
     }
 
@@ -409,7 +418,7 @@ fn decode_trade(
         quote_amount
     };
     let qdec = quote_decimals(&quote_mint);
-    Ok(wrap(
+    Ok(wrap_at(
         tx,
         event_index,
         ChainEventPayload::TradeExecuted(TradeExecuted {
@@ -449,6 +458,7 @@ fn decode_trade(
             base_supply_atomic: None,
             cashback_fee_bps: Some(cashback_bps),
         }),
+        Some(timestamp),
     ))
 }
 
@@ -559,7 +569,17 @@ fn quote_decimals(mint: &Pubkey) -> u8 {
 }
 
 fn wrap(tx: &RawTransaction, event_index: u32, payload: ChainEventPayload) -> ChainEvent {
+    wrap_at(tx, event_index, payload, None)
+}
+
+fn wrap_at(
+    tx: &RawTransaction,
+    event_index: u32,
+    payload: ChainEventPayload,
+    event_ts: Option<i64>,
+) -> ChainEvent {
     let program = Pubkey::from_base58(PROGRAM_ID).expect("static program id");
+    let chain_time = pumphound_domain::chain_time_from_parts(tx.block_time, event_ts);
     EventEnvelope {
         schema_version: SCHEMA_VERSION,
         event_id: event_id(CHAIN, &tx.signature, PROGRAM_ID, &[0], event_index),
@@ -574,8 +594,13 @@ fn wrap(tx: &RawTransaction, event_index: u32, payload: ChainEventPayload) -> Ch
         tx_index: tx.transaction_index,
         instruction_path: vec![0],
         event_index,
-        block_time: tx.block_time,
-        observed_at: tx.block_time.unwrap_or_else(pumphound_domain::now_utc),
+        block_time: chain_time,
+        observed_at: chain_time
+            .or_else(|| {
+                tx.block_time
+                    .filter(|time| pumphound_domain::is_sane_chain_unix(time.timestamp()))
+            })
+            .unwrap_or_else(pumphound_domain::now_utc),
         computed_at: pumphound_domain::now_utc(),
         available_from_slot: tx.slot,
         commitment: Commitment::Processed,

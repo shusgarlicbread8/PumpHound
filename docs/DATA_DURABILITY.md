@@ -82,13 +82,21 @@ hours. The shipped caps (`MAX_PAGES_PER_PROGRAM = 3`, i.e. ~3,000 signatures/pro
 the cap logs it explicitly (`backfill hit its page safety cap...`) rather than silently leaving
 part of the gap unfilled.
 
-**What would actually fix long-gap recovery** (not implemented): backfill per already-tracked
-mint instead of per program. An individual token's own transaction volume is a small fraction of
-the shared program address's, so `getSignaturesForAddress(mint)` for each mint in `launches` /
-`hot_set_memberships` could realistically cover hours, not seconds — at the cost of one query per
-mint instead of one per program. It still has a blind spot: a token that launched *and* was
-fully missed during the outage isn't in that mint list yet, so brand-new launches during a long
-outage remain unrecoverable by that method either. That's a real follow-up, not done here.
+**Per-mint early-life backfill is now implemented** (`crates/chain-source/src/mint_backfill.rs`,
+`just repair-evidence`). For launches with a known creation time it prefers Helius
+`getTransactionsForAddress` over a tight 90-second window; otherwise it walks mint signatures
+only inside a ~200-slot window after `creation_slot`. Brand-new launches missed entirely during
+a long outage still need the historical corpus (`configs/history-recent-90d.json`).
+
+Full-transaction fetches use compact `json` encoding first. `jsonParsed` bodies were large
+enough that the HTTP JSON decoder failed (`error decoding response body`), which blocked
+launch-time repair, mint backfill, and live create upgrades. Missing `creation_time` is now
+filled from `getBlockTime` on the launch slot before falling back to nearby-slot interpolation.
+
+**PumpSwap logs-only identity** is resolved from a durable `pool_identities` table plus an
+in-process cache. Create-pool / migrate / full-transaction trades populate it; later logs-only
+trades no longer have to be quarantined once that pool has been seen. Create and migrate log
+lines now always fetch the full transaction on the live websocket path.
 
 ## What this means in practice today
 
@@ -98,7 +106,7 @@ outage remain unrecoverable by that method either. That's a real follow-up, not 
 - A longer outage (minutes to hours) — live tailing resumes correctly from "now" with no crash
   and no runaway RPC usage, but the gap itself is only partially recovered (however much the
   per-program cap could cover) and that is now logged explicitly, not silent. Fully closing a
-  multi-hour gap needs the per-mint backfill described above, which does not exist yet.
+  multi-hour gap needs the per-mint backfill (`just repair-evidence --only mint-backfill`).
 - The underlying Postgres/ClickHouse data and the raw journal files are physically on the X9 and
   are not lost by a crash of the collector or core-api process itself — those are separate
   processes from the databases, which have their own crash recovery (Postgres WAL, ClickHouse's

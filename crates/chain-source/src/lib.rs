@@ -1,15 +1,22 @@
 mod backfill;
+mod full_tx;
 mod hot_mints;
 mod laserstream;
+mod mint_backfill;
 mod replay;
 mod websocket;
 
 pub use backfill::backfill_since_checkpoint;
+pub use full_tx::{logs_warrant_full_transaction, program_data_discriminator};
 pub use hot_mints::{is_hot_mint, logs_mention_hot, replace_hot_mints};
 pub use laserstream::HeliusLaserstreamSource;
+pub use mint_backfill::{
+    backfill_mint_early_life, early_window_signatures, MintBackfillCaps, EARLY_LIFE_SLOT_WINDOW,
+};
 pub use replay::ParquetReplaySource;
 pub use websocket::{
-    envelope_from_tx, fetch_transaction, parse_transaction, SolanaWebsocketSource,
+    envelope_from_tx, fetch_block_time, fetch_block_times, fetch_transaction, parse_transaction,
+    rpc_result, SolanaWebsocketSource,
 };
 
 use async_trait::async_trait;

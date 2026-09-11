@@ -19,6 +19,18 @@ pub struct Stores {
     pub jetstream: async_nats::jetstream::Context,
 }
 
+#[derive(Clone, Debug)]
+pub struct PoolIdentityRow {
+    pub pool: String,
+    pub token_mint: String,
+    pub quote_mint: String,
+    pub token_decimals: i16,
+    pub quote_decimals: i16,
+    pub reversed: bool,
+    pub source: String,
+    pub first_seen_slot: i64,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
     #[error("postgres: {0}")]
@@ -342,6 +354,93 @@ impl Stores {
         Ok(())
     }
 
+    pub async fn upsert_pool_identity(
+        &self,
+        row: &PoolIdentityRow,
+    ) -> Result<(), StorageError> {
+        sqlx::query(
+            r#"INSERT INTO pumphound.pool_identities
+               (pool, token_mint, quote_mint, token_decimals, quote_decimals, reversed, source, first_seen_slot, known_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
+               ON CONFLICT (pool) DO UPDATE SET
+                 token_mint=EXCLUDED.token_mint,
+                 quote_mint=EXCLUDED.quote_mint,
+                 token_decimals=EXCLUDED.token_decimals,
+                 quote_decimals=EXCLUDED.quote_decimals,
+                 reversed=EXCLUDED.reversed,
+                 source=EXCLUDED.source,
+                 first_seen_slot=LEAST(pumphound.pool_identities.first_seen_slot, EXCLUDED.first_seen_slot)"#,
+        )
+        .bind(&row.pool)
+        .bind(&row.token_mint)
+        .bind(&row.quote_mint)
+        .bind(row.token_decimals)
+        .bind(row.quote_decimals)
+        .bind(row.reversed)
+        .bind(&row.source)
+        .bind(row.first_seen_slot)
+        .execute(&self.postgres)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn load_pool_identities(&self) -> Result<Vec<PoolIdentityRow>, StorageError> {
+        let rows = sqlx::query(
+            r#"SELECT pool, token_mint, quote_mint, token_decimals, quote_decimals, reversed, source, first_seen_slot
+               FROM pumphound.pool_identities"#,
+        )
+        .fetch_all(&self.postgres)
+        .await;
+        match rows {
+            Ok(rows) => Ok(rows
+                .into_iter()
+                .map(|row| PoolIdentityRow {
+                    pool: row.get("pool"),
+                    token_mint: row.get("token_mint"),
+                    quote_mint: row.get("quote_mint"),
+                    token_decimals: row.get("token_decimals"),
+                    quote_decimals: row.get("quote_decimals"),
+                    reversed: row.get("reversed"),
+                    source: row.get("source"),
+                    first_seen_slot: row.get("first_seen_slot"),
+                })
+                .collect()),
+            Err(error)
+                if error
+                    .as_database_error()
+                    .and_then(|db| db.code())
+                    .is_some_and(|code| code == "42P01") =>
+            {
+                Ok(Vec::new())
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    pub async fn update_launch_creation_time(
+        &self,
+        launch_id: Uuid,
+        creation_time: DateTime<Utc>,
+        source: &str,
+    ) -> Result<(), StorageError> {
+        sqlx::query(
+            r#"UPDATE pumphound.launches
+               SET creation_time=$2,
+                   attributes = attributes || jsonb_build_object('creation_time_source', $3::text)
+               WHERE launch_id=$1
+                 AND (
+                   creation_time IS NULL
+                   OR COALESCE(attributes->>'creation_time_source','') = 'slot_interpolation'
+                 )"#,
+        )
+        .bind(launch_id)
+        .bind(creation_time)
+        .bind(source)
+        .execute(&self.postgres)
+        .await?;
+        Ok(())
+    }
+
     pub async fn load_checkpoint(
         &self,
         source: &str,
@@ -540,6 +639,35 @@ impl Stores {
             .bind(slot)
             .execute(&self.postgres)
             .await?;
+            if t.raw_event
+                .get("identity_source")
+                .and_then(|value| value.as_str())
+                .is_some_and(|source| {
+                    source == "transaction_instruction_accounts" || source == "pool_identity_cache"
+                })
+            {
+                let _ = self
+                    .upsert_pool_identity(&PoolIdentityRow {
+                        pool: t.market.to_string(),
+                        token_mint: mint,
+                        quote_mint: quote,
+                        token_decimals: base_decimals,
+                        quote_decimals,
+                        reversed: t
+                            .raw_event
+                            .get("orientation_normalized")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false),
+                        source: t
+                            .raw_event
+                            .get("identity_source")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("trade")
+                            .to_string(),
+                        first_seen_slot: slot,
+                    })
+                    .await;
+            }
             return Ok(());
         }
         if let ChainEventPayload::LaunchCreated(c) = &ev.payload {
@@ -579,8 +707,43 @@ impl Stores {
                 r#"INSERT INTO pumphound.launches
                 (launch_id, mint, protocol, program_id, creator, creation_event_id, creation_signature,
                  creation_slot, creation_time, known_at, quote_mint, canonicality, attributes)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now(),$10,$11,$12)
-                ON CONFLICT (program_id, mint) DO NOTHING"#,
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now(),$10,'canonical',$11)
+                ON CONFLICT (program_id, mint) DO UPDATE SET
+                  creator = CASE
+                    WHEN EXCLUDED.creator IS NOT NULL AND EXCLUDED.creator <> ''
+                    THEN EXCLUDED.creator
+                    ELSE pumphound.launches.creator
+                  END,
+                  creation_time = COALESCE(pumphound.launches.creation_time, EXCLUDED.creation_time),
+                  creation_slot = CASE
+                    WHEN pumphound.launches.attributes->>'observed_from' = 'trade'
+                    THEN EXCLUDED.creation_slot
+                    ELSE pumphound.launches.creation_slot
+                  END,
+                  creation_signature = CASE
+                    WHEN pumphound.launches.attributes->>'observed_from' = 'trade'
+                    THEN EXCLUDED.creation_signature
+                    ELSE pumphound.launches.creation_signature
+                  END,
+                  creation_event_id = CASE
+                    WHEN pumphound.launches.attributes->>'observed_from' = 'trade'
+                    THEN EXCLUDED.creation_event_id
+                    ELSE pumphound.launches.creation_event_id
+                  END,
+                  quote_mint = CASE
+                    WHEN EXCLUDED.quote_mint NOT IN (
+                      '11111111111111111111111111111111'
+                    ) THEN EXCLUDED.quote_mint
+                    ELSE pumphound.launches.quote_mint
+                  END,
+                  canonicality = 'canonical',
+                  attributes = pumphound.launches.attributes || EXCLUDED.attributes
+                    || CASE
+                         WHEN pumphound.launches.creation_time IS NULL
+                          AND EXCLUDED.creation_time IS NOT NULL
+                         THEN jsonb_build_object('creation_time_source','create_event')
+                         ELSE '{}'::jsonb
+                       END"#,
             )
             .bind(launch_id)
             .bind(c.mint.to_string())
@@ -595,33 +758,18 @@ impl Stores {
             .bind(ev.slot.0 as i64)
             .bind(ev.block_time)
             .bind(c.quote_mint.to_string())
-            .bind("provisional")
             .bind(serde_json::json!({
                 "flags": c.protocol_flags,
                 "name": c.name,
                 "symbol": c.symbol,
                 "uri": c.metadata_uri,
                 "observed_from": "create",
+                "creation_time_source": if ev.block_time.is_some() {
+                    "create_event"
+                } else {
+                    "missing"
+                },
             }))
-            .execute(&self.postgres)
-            .await?;
-            sqlx::query(
-                r#"UPDATE pumphound.launches
-                SET creator=$1,
-                    attributes = attributes || $2::jsonb,
-                    canonicality = 'canonical'
-                WHERE program_id=$3 AND mint=$4 AND attributes->>'observed_from' = 'trade'"#,
-            )
-            .bind(c.creator.map(|creator| creator.to_string()))
-            .bind(serde_json::json!({
-                "flags": c.protocol_flags,
-                "name": c.name,
-                "symbol": c.symbol,
-                "uri": c.metadata_uri,
-                "observed_from": "create",
-            }))
-            .bind(ev.program_id.to_string())
-            .bind(c.mint.to_string())
             .execute(&self.postgres)
             .await?;
 
@@ -648,6 +796,79 @@ impl Stores {
             .bind(ev.slot.0 as i64)
             .execute(&self.postgres)
             .await?;
+            if ev.protocol == pumphound_domain::Protocol::PumpSwap {
+                let _ = self
+                    .upsert_pool_identity(&PoolIdentityRow {
+                        pool: c.market.to_string(),
+                        token_mint: c.mint.to_string(),
+                        quote_mint: c.quote_mint.to_string(),
+                        token_decimals: c.base_decimals as i16,
+                        quote_decimals: c.quote_decimals as i16,
+                        reversed: c
+                            .protocol_flags
+                            .get("orientation_normalized")
+                            .and_then(|value| value.as_bool())
+                            .unwrap_or(false),
+                        source: "create_pool_event".into(),
+                        first_seen_slot: ev.slot.0 as i64,
+                    })
+                    .await;
+            }
+        }
+        if let ChainEventPayload::LaunchMigrated(migrated) = &ev.payload {
+            let mint = migrated.mint.to_string();
+            let quote = migrated.quote_mint.to_string();
+            self.ensure_asset(&mint, 6, "UNK", ev.slot.0 as i64).await?;
+            self.ensure_asset(
+                &quote,
+                if quote == pumphound_domain::USDC_MINT {
+                    6
+                } else {
+                    9
+                },
+                if quote == pumphound_domain::USDC_MINT {
+                    "USDC"
+                } else {
+                    "SOL"
+                },
+                ev.slot.0 as i64,
+            )
+            .await?;
+            sqlx::query(
+                r#"INSERT INTO pumphound.markets
+                (market, launch_id, base_mint, quote_mint, protocol, created_slot, known_at, migrated_from)
+                VALUES (
+                  $1,
+                  (SELECT launch_id FROM pumphound.launches WHERE mint=$2 ORDER BY known_at ASC LIMIT 1),
+                  $2,$3,'pump_swap',$4, now(), $5
+                )
+                ON CONFLICT (market) DO UPDATE SET
+                  launch_id=COALESCE(EXCLUDED.launch_id, pumphound.markets.launch_id),
+                  base_mint=EXCLUDED.base_mint,
+                  quote_mint=EXCLUDED.quote_mint,
+                  protocol=EXCLUDED.protocol,
+                  migrated_from=COALESCE(EXCLUDED.migrated_from, pumphound.markets.migrated_from),
+                  known_at=EXCLUDED.known_at"#,
+            )
+            .bind(migrated.new_market.to_string())
+            .bind(&mint)
+            .bind(&quote)
+            .bind(ev.slot.0 as i64)
+            .bind(migrated.old_market.to_string())
+            .execute(&self.postgres)
+            .await?;
+            let _ = self
+                .upsert_pool_identity(&PoolIdentityRow {
+                    pool: migrated.new_market.to_string(),
+                    token_mint: mint,
+                    quote_mint: quote,
+                    token_decimals: 6,
+                    quote_decimals: 9,
+                    reversed: false,
+                    source: "launch_migrated".into(),
+                    first_seen_slot: ev.slot.0 as i64,
+                })
+                .await;
         }
         Ok(())
     }
