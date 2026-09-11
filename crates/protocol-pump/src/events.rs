@@ -444,7 +444,7 @@ fn decode_trade(
             real_base_atomic: Some(r_tok),
             real_quote_atomic: Some(if r_quote.is_zero() { r_sol } else { r_quote }),
             raw_event: json!({
-                "creator": creator.to_string(),
+                "creator": trade_creator_or_none(creator),
                 "fee_basis_points": fee_bps,
                 "creator_fee_basis_points": creator_fee_bps,
                 "mayhem_mode": mayhem,
@@ -556,6 +556,20 @@ fn normalize_quote_mint(mint: Pubkey) -> Pubkey {
         Pubkey::from_base58(pumphound_domain::WSOL_MINT).expect("static WSOL mint")
     } else {
         mint
+    }
+}
+
+/// `None`, not the zero Pubkey, when pump.fun leaves a trade's creator-fee recipient at its
+/// default — the same comparison `creator_fee_applies` already uses to mean "no distinct creator
+/// set." Storage's launch-upsert reads this field's absence as a signal to fall back to a guess
+/// from the trader's own address instead; stringifying the zero Pubkey here defeated that
+/// fallback and let the System Program address get stored as a real-looking "creator" (confirmed
+/// live: 400+ launches before this was added).
+fn trade_creator_or_none(creator: Pubkey) -> Option<String> {
+    if creator == Pubkey([0u8; 32]) {
+        None
+    } else {
+        Some(creator.to_string())
     }
 }
 
@@ -916,5 +930,16 @@ mod tests {
     fn non_zero_quote_mint_passes_through_unchanged() {
         let usdc = Pubkey::from_base58(pumphound_domain::USDC_MINT).unwrap();
         assert_eq!(normalize_quote_mint(usdc), usdc);
+    }
+
+    #[test]
+    fn zero_pubkey_trade_creator_becomes_none_not_system_program_string() {
+        assert_eq!(trade_creator_or_none(Pubkey([0u8; 32])), None);
+    }
+
+    #[test]
+    fn non_zero_trade_creator_passes_through_as_string() {
+        let real = Pubkey::from_base58(pumphound_domain::USDC_MINT).unwrap();
+        assert_eq!(trade_creator_or_none(real), Some(real.to_string()));
     }
 }

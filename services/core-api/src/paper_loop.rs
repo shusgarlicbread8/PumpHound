@@ -914,16 +914,28 @@ async fn next_fixed_exit_decision_key(
     )))
 }
 
+/// Outcome of trying to rehydrate a cold market for an exit quote.
+enum ExitRehydrate {
+    /// Current on-chain state, quotable.
+    Snapshot(pumphound_domain::MarketSnapshot),
+    /// Per-market RPC throttle is active; not new information, ask again later.
+    Throttled,
+    /// The state cannot be obtained honestly: graduated curve, unsupported protocol, RPC
+    /// failure. Distinct from `Throttled` -- this is worth recording, not just retrying blind.
+    Unavailable(String),
+}
+
 /// Rehydrate a cold market from its on-chain account so a max-hold exit can be quoted on real
-/// current state. Returns `None` (and records why, once per reason change) when the state cannot
-/// be obtained honestly: graduated curve, PumpSwap pool, RPC failure.
+/// current state. The caller records `Unavailable` reasons as a genuine (budget-counted,
+/// visible) exit attempt instead of silently retrying forever -- see
+/// `record_unrehydratable_exit_attempt`.
 async fn unstrand_position(
     state: &Arc<AppState>,
     launch_id: Uuid,
     market: Pubkey,
     mint: &str,
     quote_mint: Pubkey,
-) -> Option<pumphound_domain::MarketSnapshot> {
+) -> ExitRehydrate {
     let protocol: Option<String> = sqlx::query_scalar(
         "SELECT protocol FROM pumphound.launches WHERE launch_id=$1",
     )
@@ -935,28 +947,128 @@ async fn unstrand_position(
     let protocol = match protocol.as_deref() {
         Some("pump_curve") => pumphound_domain::Protocol::PumpCurve,
         Some("pump_swap") => pumphound_domain::Protocol::PumpSwap,
-        _ => return None,
+        _ => return ExitRehydrate::Unavailable("launch_protocol_unknown".into()),
     };
-    let mint_key = Pubkey::from_base58(mint).ok()?;
-    let client = reqwest::Client::builder()
+    let Ok(mint_key) = Pubkey::from_base58(mint) else {
+        return ExitRehydrate::Unavailable("invalid_mint".into());
+    };
+    let Ok(client) = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
-        .ok()?;
+    else {
+        return ExitRehydrate::Unavailable("http_client_build_failed".into());
+    };
     let outcome =
         crate::market_rehydrate::rehydrate(&client, protocol, market, mint_key, quote_mint).await;
-    let reason = outcome.reason();
     match outcome {
         crate::market_rehydrate::Rehydrated::Curve(snapshot) => {
             state.markets.write().await.upsert_snapshot(snapshot.clone());
             tracing::info!(mint, slot = snapshot.as_of.slot.0, "rehydrated cold market from chain account for paper exit");
-            Some(snapshot)
+            ExitRehydrate::Snapshot(snapshot)
         }
-        crate::market_rehydrate::Rehydrated::Unavailable(ref r) if r == "throttled" => None,
-        _ => {
-            tracing::debug!(mint, reason, "open paper position remains stranded");
-            None
+        crate::market_rehydrate::Rehydrated::Unavailable(ref r) if r == "throttled" => {
+            ExitRehydrate::Throttled
         }
+        other => ExitRehydrate::Unavailable(other.reason()),
     }
+}
+
+fn exit_stall_log_throttle(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>> {
+    static T: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+    > = std::sync::OnceLock::new();
+    T.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// A fixed-max-hold exit whose market cannot be rehydrated (graduated curve, unsupported
+/// protocol, RPC failure, or no feature snapshot at all) used to just `continue` -- silently,
+/// forever, with only a `debug!`-level log invisible at this service's configured level, and
+/// with no decision ever recorded. Since no decision was ever written, the position could never
+/// accumulate real attempts toward `EXIT_MAX_ATTEMPTS` either, so it neither retried nor ever
+/// surfaced as exhausted: it sat open forever, holding book capacity, with no trace of why
+/// (confirmed live 2026-09-09: position 01a086e1-6e4a-79c0-8851-b286ee95d387's token graduated
+/// off the bonding curve minutes after entry; every scan tick since has silently no-op'd).
+///
+/// Record a genuine, budget-counted, no-fill attempt instead -- exactly like a rejected order --
+/// so the existing retry/backoff machinery, and eventual exhaustion handling, applies here too.
+async fn record_unrehydratable_exit_attempt(
+    state: &Arc<AppState>,
+    desk: &LiveDesk,
+    experiment_id: &str,
+    position_id: &str,
+    launch_id: Uuid,
+    reason: &str,
+) -> anyhow::Result<()> {
+    let throttle_key = format!("{position_id}:{reason}");
+    {
+        let mut throttle = exit_stall_log_throttle()
+            .lock()
+            .expect("exit stall throttle");
+        if let Some(last) = throttle.get(&throttle_key) {
+            if last.elapsed() < std::time::Duration::from_secs(600) {
+                return Ok(());
+            }
+        }
+        throttle.insert(throttle_key, std::time::Instant::now());
+    }
+    warn!(
+        position_id,
+        launch_id = %launch_id,
+        reason,
+        book = desk.book.key,
+        "fixed-max-hold exit cannot rehydrate a market snapshot for this position; \
+         recording a no-fill attempt instead of retrying silently forever"
+    );
+    let Some(decision_key) = next_fixed_exit_decision_key(&state.stores, position_id).await? else {
+        return Ok(());
+    };
+    let feature_snapshot_id: Option<String> = sqlx::query_scalar(
+        r#"SELECT feature_snapshot_id FROM pumphound.feature_snapshots
+           WHERE launch_id=$1 ORDER BY knowledge_cutoff DESC LIMIT 1"#,
+    )
+    .bind(launch_id)
+    .fetch_optional(&state.stores.postgres)
+    .await?;
+    let Some(feature_snapshot_id) = feature_snapshot_id else {
+        return Ok(());
+    };
+    paper_ledger::persist_decision(
+        &state.stores,
+        Uuid::now_v7(),
+        &decision_key,
+        Some(desk.run_id),
+        launch_id,
+        None,
+        &feature_snapshot_id,
+        desk.book.key,
+        Some(desk.book.key),
+        "FULL_EXIT",
+        "EXIT",
+        &json!({}),
+        &json!({
+            "experiment_id": experiment_id,
+            "strategy_version": desk.book.key,
+            "position_id": position_id,
+            "paper_only": true,
+            "market_unrehydratable": true,
+            "rehydrate_reason": reason
+        }),
+        &[
+            "fixed_maximum_hold_reached".to_string(),
+            "market_unrehydratable".to_string(),
+        ],
+        &json!({
+            "experiment_id": experiment_id,
+            "fixed_exit": true,
+            "paper_only": true,
+            "live_money": false,
+            "market_unrehydratable": true,
+            "rehydrate_reason": reason
+        }),
+    )
+    .await?;
+    Ok(())
 }
 
 fn identity_checked_snapshot(
@@ -2168,16 +2280,31 @@ async fn scan_learning_exits(
                 identity_checked_snapshot(markets.get(mint), mint)
             };
             let snapshot = match snapshot {
-                Some(snapshot) => snapshot,
+                Some(snapshot) => Some(snapshot),
                 None => {
                     if !hold_reached {
                         continue;
                     }
                     match unstrand_position(state, launch_id, market, mint, quote_mint).await {
-                        Some(snapshot) => snapshot,
-                        None => continue,
+                        ExitRehydrate::Snapshot(snapshot) => Some(snapshot),
+                        ExitRehydrate::Throttled => None,
+                        ExitRehydrate::Unavailable(reason) => {
+                            record_unrehydratable_exit_attempt(
+                                state,
+                                &desk,
+                                experiment_id,
+                                position_id,
+                                launch_id,
+                                &reason,
+                            )
+                            .await?;
+                            None
+                        }
                     }
                 }
+            };
+            let Some(snapshot) = snapshot else {
+                continue;
             };
             let feature_snapshot_id: Option<String> = sqlx::query_scalar(
                 r#"SELECT feature_snapshot_id FROM pumphound.feature_snapshots
@@ -2187,9 +2314,15 @@ async fn scan_learning_exits(
             .fetch_optional(&state.stores.postgres)
             .await?;
             let Some(feature_snapshot_id) = feature_snapshot_id else {
-                if hold_reached {
-                    continue;
-                }
+                record_unrehydratable_exit_attempt(
+                    state,
+                    &desk,
+                    experiment_id,
+                    position_id,
+                    launch_id,
+                    "no_feature_snapshot_for_launch",
+                )
+                .await?;
                 continue;
             };
             let mut exit_reasons = vec!["fixed_maximum_hold_reached".to_string()];

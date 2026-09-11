@@ -4,6 +4,7 @@ import { useEffect, type ReactNode } from "react";
 import { EmptyState } from "../../components/EmptyState";
 import { ApiRequestError, api } from "../../lib/api";
 import { normalizeMode, solscanTx, truncatePubkey } from "../../lib/format";
+import { formatAtomic, isAtomicString } from "../../lib/units";
 import type {
   LaunchDecision,
   PaperPortfolioSnapshot,
@@ -248,13 +249,13 @@ function PortfolioContents({
         <Metric label="Current equity" value={amountText(snapshot.current_equity)} />
         <Metric
           label="Realized P&L"
-          value={amountText(snapshot.realized_pnl) === "Unknown" ? valueText(snapshot.pnl?.realized_quote_atomic) : amountText(snapshot.realized_pnl)}
+          value={amountText(snapshot.realized_pnl) === "Unknown" ? rawQuoteAtomicSolText(snapshot.pnl?.realized_quote_atomic) : amountText(snapshot.realized_pnl)}
           tone={amountTone(snapshot.realized_pnl)}
           hint={snapshot.sample_warning ?? undefined}
         />
         <Metric
           label="Unrealized P&L"
-          value={amountText(snapshot.unrealized_pnl) === "Unknown" ? valueText(snapshot.pnl?.unrealized_quote_atomic) : amountText(snapshot.unrealized_pnl)}
+          value={amountText(snapshot.unrealized_pnl) === "Unknown" ? rawQuoteAtomicSolText(snapshot.pnl?.unrealized_quote_atomic) : amountText(snapshot.unrealized_pnl)}
           tone={amountTone(snapshot.unrealized_pnl)}
         />
         <Metric
@@ -890,6 +891,19 @@ function NoneBlock({ label }: { label: string }) {
 function valueText(value: ReportValue | undefined): string {
   if (value === null || value === undefined || value === "") return "Unknown";
   return String(value);
+}
+
+// Every position/portfolio P&L in this ledger is WSOL-denominated (see paper_ledger — there is
+// no live-money path, and the paper simulator only ever quotes against SOL). When the
+// pre-formatted `amountText` field is absent and callers fall back to a raw `*_quote_atomic`
+// value, that fallback used to run it through `valueText`, which just stringifies whatever it's
+// given — showing a raw lamport count (e.g. "-4351204253") as if it were already SOL. Decimals
+// are fixed at 9 rather than looked up per-asset because this fallback only ever applies to a
+// quote-denominated figure, which this system never lets be anything but SOL.
+function rawQuoteAtomicSolText(value: ReportValue | undefined): string {
+  const text = valueText(value);
+  if (text === "Unknown" || !isAtomicString(text)) return text;
+  return `${formatAtomic(text, 9)} SOL`;
 }
 
 function amountText(amount: PortfolioAmount | null | undefined): string {

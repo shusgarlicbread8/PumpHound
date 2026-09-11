@@ -425,7 +425,7 @@ fn decode_one(
                 ChainEventPayload::LaunchCreated(LaunchCreated {
                     launch_id: uuid::Uuid::now_v7().to_string(),
                     mint: identity.token_mint,
-                    creator: Some(coin_creator),
+                    creator: pool_creator_or_none(coin_creator),
                     market: pool,
                     quote_mint: identity.quote_mint,
                     base_decimals: identity.token_decimals,
@@ -707,6 +707,22 @@ impl PoolIdentity {
         } else {
             (pool_base, pool_quote)
         }
+    }
+}
+
+/// `None`, not the zero Pubkey, when pump.fun leaves a pool's creator-fee recipient at its
+/// default — `creator_fee_applies` a few lines below this call site already treats that same
+/// comparison as "no distinct creator set." Storing `Some(coin_creator)` unconditionally here let
+/// the System Program address get written to `launches.creator` as if it were a real, prolific
+/// creator (confirmed live: 100+ pump_swap launches all attributed to one "creator" that never
+/// created anything — poisoning `refresh_creator_coordination_risk`'s per-creator grouping the
+/// same way the equivalent pump_curve trade-decoder bug did, fixed separately in
+/// `pumphound-protocol-pump`).
+fn pool_creator_or_none(coin_creator: Pubkey) -> Option<Pubkey> {
+    if coin_creator == Pubkey([0u8; 32]) {
+        None
+    } else {
+        Some(coin_creator)
     }
 }
 
@@ -1123,5 +1139,16 @@ mod tests {
         let identity = pool_identity_from_transaction(&tx, pool, user).unwrap();
         assert_eq!(identity.token_mint, token);
         assert_eq!(identity.quote_mint, wsol);
+    }
+
+    #[test]
+    fn zero_pubkey_pool_creator_becomes_none_not_system_program() {
+        assert_eq!(pool_creator_or_none(Pubkey([0u8; 32])), None);
+    }
+
+    #[test]
+    fn non_zero_pool_creator_passes_through() {
+        let real = key(7);
+        assert_eq!(pool_creator_or_none(real), Some(real));
     }
 }

@@ -537,10 +537,19 @@ impl Stores {
             // stops being reasonable when the trader identity is itself unresolved (PumpSwap
             // logs-only decode without the full transaction leaves `trader` as the zeroed
             // Pubkey, which base58-encodes to the System Program address) — that produced
-            // launches whose "creator" was really just "11111111111111111111111111111111111111112",
-            // a real-looking address for a wallet that never touched this token. The UI already
-            // renders an empty creator as Unknown, so fall through to that instead of fabricating one.
-            const UNRESOLVED_PUBKEY: &str = "11111111111111111111111111111111111111112";
+            // launches whose "creator" was really just the zeroed Pubkey, a real-looking address
+            // for a wallet that never touched this token. The UI already renders an empty
+            // creator as Unknown, so fall through to that instead of fabricating one.
+            //
+            // This guard's constant was wrong for a long time: a 32-byte zero Pubkey base58-
+            // encodes to 32 repeated "1"s, not the 41-character, trailing-"2" string this used to
+            // hold (which matches no real Solana account) — so the comparison below never once
+            // caught the case it was written for. Confirmed live: 533 launches ended up with
+            // `creator` equal to the true zeroed Pubkey before this was corrected, the single
+            // largest "creator" group in the table — poisoning `refresh_creator_coordination_risk`
+            // (crates/storage/src/lib.rs's own first-10-buyers-per-creator query), which had no
+            // way to know those 533 unrelated launches weren't actually one prolific creator.
+            const UNRESOLVED_PUBKEY: &str = "11111111111111111111111111111111";
             let trader_str = t.trader.to_string();
             let creator = if creator.is_empty() && trader_str != UNRESOLVED_PUBKEY {
                 trader_str
@@ -752,7 +761,14 @@ impl Stores {
                 pumphound_domain::Protocol::PumpSwap => "pump_swap",
             })
             .bind(ev.program_id.to_string())
-            .bind(c.creator.map(|creator| creator.to_string()))
+            // `launches.creator` is NOT NULL; the established "we don't actually know" sentinel
+            // for this column is empty string, not SQL NULL (matches the trade-observed fallback
+            // path a few functions up, which also lands on "" rather than NULL). `c.creator` was
+            // unconditionally `Some(..)` for every decoder until protocol-pumpswap started
+            // passing `None` for a coin_creator left at its on-chain default — an INSERT binding
+            // plain `None::<String>` here would fail the NOT NULL constraint outright the first
+            // time that happened.
+            .bind(c.creator.map(|creator| creator.to_string()).unwrap_or_default())
             .bind(&ev.event_id)
             .bind(&ev.signature)
             .bind(ev.slot.0 as i64)

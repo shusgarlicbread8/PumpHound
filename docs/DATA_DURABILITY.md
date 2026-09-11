@@ -250,3 +250,63 @@ the diagnosis — the `DataFileRead` waits on collector's own ingest tables, the
 slow-query log (which predates this session's monitoring entirely), and the swap/load state are all
 independent of the measurement harness — but the exact "3.2s mean, spike every 15-30s" figures
 above are an upper bound, not a clean baseline number.
+
+## Bug found and fixed: `launches.creator` decoded as the System Program ID, three separate times
+
+Found 2026-09-11 the same way as the `quote_mint` bug above: the Creators page showed one
+"creator" (`11111111111111111111111111111111`, 32 zero bytes — the System Program ID) attributed
+**534 launches**, more than any real creator — which would have silently poisoned
+`refresh_creator_coordination_risk` (the heuristic that flags coordinated insider rings by
+checking whether the same wallets keep buying one creator's launches): 534 completely unrelated
+launches were being treated as one prolific creator's work.
+
+This turned out to be three independent bugs sharing one symptom, found and fixed one at a time as
+each fix's own verification revealed the next:
+
+1. **`crates/storage/src/lib.rs`'s trade-observed-launch fallback** (`upsert_launch_from_event`,
+   the "provisional launch synthesized from a trade because we haven't seen its create event yet"
+   path) had a guard meant to stop an unresolved trader address from being stored as a creator
+   guess: `if trader_str != UNRESOLVED_PUBKEY`. The constant itself was wrong — a 32-byte zero
+   `Pubkey` base58-encodes to 32 repeated `"1"`s, not the 41-character, trailing-`"2"` string this
+   held (which matches no real Solana account). The comparison never once matched what it was
+   written to catch. Fixed the constant; corrected the comment, which had also stated the wrong
+   value.
+2. **`crates/protocol-pump/src/events.rs`'s trade decoder** stringified a trade's `creator` field
+   into `raw_event["creator"]` unconditionally — including when pump.fun leaves that field at its
+   on-chain default (the zero `Pubkey`, meaning "no distinct creator-fee recipient set"), one line
+   away from a `creator_fee_applies: Some(creator != zero)` check that already treated that exact
+   comparison as meaningful. Storage's fallback (bug 1) only kicks in when this key is *absent*;
+   writing the zero Pubkey's string here defeated it just as effectively as bug 1's wrong constant
+   did. Fixed by extracting `trade_creator_or_none`, mirroring the `normalize_quote_mint` fix.
+3. **`crates/protocol-pumpswap/src/lib.rs`'s create decoder** had the identical shape a third
+   time: `creator: Some(coin_creator)` unconditional, one line from a `creator_fee_applies`
+   check on the same zero comparison. Fixed with `pool_creator_or_none`. This path also exposed a
+   real landmine: `launches.creator` is `NOT NULL`, and storage's insert bound
+   `c.creator.map(|c| c.to_string())` straight through — every existing decoder had always set
+   `creator: Some(..)`, so `None` had never once reached that bind. Returning `None` from the
+   pumpswap fix without also fixing the bind would have turned a data-quality bug into a collector
+   crash the next time a pool's creator-fee recipient was left at its default. Added
+   `.unwrap_or_default()` so `None` becomes `""` — this schema's existing "genuinely unknown"
+   sentinel — instead of a NULL the column can't hold.
+
+All three fixes were verified live against fresh, real launches (not just unit tests) before being
+considered done: the trade-decoder fix against 32 fresh trade-observed launches (32/32 resolved a
+real creator, 0 fell through to zero), the pumpswap fix against 16 fresh pool creates over a 2-hour
+window (15 real, 1 ambiguous — see caveat below; total zero-creator count for this path stayed
+flat at 117 across the whole window despite those 16 new creates, which is the stronger signal).
+
+**Historical rows corrected, unlike the `quote_mint` bug's backfill (still pending as of the
+section above).** Once both decoder fixes were confirmed holding, all 561 affected historical rows
+were updated from the misleading zero-Pubkey string to `''` — this schema's own "unknown" sentinel
+for this column, already excluded from `refresh_creator_coordination_risk`'s grouping
+(`WHERE creator <> ''`). Chose `''` over trying to re-derive a "real" value for the 443
+trade-fallback rows specifically because it's simple, always correct, and matches what the fixed
+decoders now do for the pump_swap case going forward — re-deriving the original trader per row
+would need a join back to the exact observing trade event, more moving parts for a correction
+whose only real requirement is "stop lying, say unknown."
+
+**One loose end:** of the 16 fresh pump_swap creates checked above, 15 resolved a real creator and
+1 still showed the zero Pubkey — but the *aggregate* zero-creator count for this path didn't grow
+over the same window, which is inconsistent with a genuinely new occurrence and more likely means
+that one row predates the fix and just fell inside a slightly generous verification time window.
+Not chased further; worth a second look if this path's count ever visibly grows again.
